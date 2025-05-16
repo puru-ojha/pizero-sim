@@ -1,0 +1,23 @@
+# Global settings
+Fixed Frame=base_link
+
+# Add Robot Model
+Displays:
+  - Class: rviz/RobotModel
+    Name: Robot Model
+    Enabled: true
+    Description: Displays the URDF model of the robot
+    Robot Description: robot_description
+
+# Add a Display for visualizing trajectories
+  - Class: rviz/Path
+    Name: Trajectory
+    Enabled: true
+    Description: Displays the trajectory of the robot
+    Topic: /arm_trajectory
+    Color: 255; 0; 0
+    Line Style: Lines
+    Line Width: 0.03
+
+
+

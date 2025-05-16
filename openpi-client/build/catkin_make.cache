@@ -1,0 +1,2 @@
+
+-DCATKIN_DEVEL_PREFIX=/home/gunjan/catkin_ws/src/openpi-client/devel -DCMAKE_INSTALL_PREFIX=/home/gunjan/catkin_ws/src/openpi-client/install -G Unix Makefiles

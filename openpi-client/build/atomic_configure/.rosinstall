@@ -1,0 +1,2 @@
+- setup-file:
+    local-name: /home/gunjan/catkin_ws/src/openpi-client/devel/setup.sh

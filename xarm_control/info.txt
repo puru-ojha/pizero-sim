@@ -1,0 +1,193 @@
+Project Summary: xArm7 Control with External Policy Server
+
+Goal:
+
+The overall goal of this project is to control a simulated xArm7 robotic arm in Gazebo using an external Python server as its "brain" or policy. The server will decide how the robot should move based on camera images and the robot's current joint positions.
+
+System Components:
+
+Gazebo Simulation (xarm7_beside_table.launch):
+Provides a 3D simulation environment.
+Contains the xArm7 robot model, a table, and optionally, a simulated RealSense camera.
+Publishes camera images from a simulated camera on the topic /camera/image_raw and /camera/camera_info.
+Publishes images from the simulated Realsense camera on the topic /arm_camera/camera/image_raw and /arm_camera/camera/camera_info.
+Publishes the robot's joint states on /xarm/joint_states.
+Publishes the /clock topic, which synchronizes the simulation time.
+ROS Control:
+ROS control is used to interface with the simulated xArm7 robot.
+The xarm_controller package contains the configuration and the controller for the arm.
+The xarm controller recieves a goal trajectory in the topic /xarm/xarm7_traj_controller/follow_joint_trajectory/goal and publishes the result of the trajectory in the topic /xarm/xarm7_traj_controller/follow_joint_trajectory/result.
+camera_joint_control_node.py (ROS Node):
+This is the core ROS node, responsible for:
+Subscribing to Topics:
+/camera/image_raw and /camera/camera_info: Gazebo camera images and camera info.
+/arm_camera/camera/image_raw and /arm_camera/camera/camera_info: RealSense camera images and camera info.
+/xarm/joint_states: The current joint positions of the xArm.
+Communicating with the External Server:
+Uses the WebsocketClientPolicy from the openpi_client package to send and receive data to/from the external policy server.
+Collecting Data:
+Collects and formats the latest camera images (Gazebo and RealSense), the joint states, and the gripper state.
+Creating the observation Dictionary:
+Packages the collected data into a dictionary called observation which is formatted as:
+content_copyaddcompare_arrowsopen_in_full
+observation = {
+    "observation/image": resized_and_encoded_gazebo_image,
+    "observation/wrist_image": resized_and_encoded_realsense_image,
+    "observation/state": joint_positions,
+    "observation/gripper_state": gripper_state,
+    "prompt": "None",
+}
+Sending Data to the Server:
+Calls self.policy_client.infer(observation) to send the observation data to the external server via WebSocket.
+Receiving the Action Chunk:
+Receives an action_chunk (a list of target joint angles and a gripper state) from the server.
+Converting to JointTrajectory:
+Converts the action_chunk into a JointTrajectory message, which is the format that the xArm's controller understands.
+Sending Trajectories:
+Uses an action client (FollowJointTrajectoryAction) to send the JointTrajectory to the /xarm/xarm7_traj_controller/follow_joint_trajectory/goal topic.
+The goal is then send to the robot, the result can be accessed in /xarm/xarm7_traj_controller/follow_joint_trajectory/result
+Moving to default position:
+At the start of the node, the robot moves to its default position.
+Continuously Loop:
+The control_loop() will continue to run indefinitely, until the program is stopped.
+openpi_client Package:
+This is a package containing helper code for communicating with the external policy server.
+WebsocketClientPolicy:
+Handles the low-level WebSocket communication details.
+Connects to the server.
+Serializes and deserializes data using msgpack-numpy.
+Provides the infer() method to send data and receive actions.
+image_tools
+Provides tools for resizing and converting images.
+server.py (External Python Server):
+This is a standalone Python script (not a ROS node).
+It runs separately from the ROS system.
+WebSocket Server:
+Sets up a WebSocket server that waits for connections from the WebsocketClientPolicy.
+Receives observation:
+Receives the serialized observation dictionary from the client.
+Processes Data:
+This is where the "brain" of the robot would be implemented. Currently, it returns a constant action chunk as an example.
+In a real application, you would use machine learning models or other algorithms here to decide how the robot should move.
+Generates action_chunk:
+Calculates the action_chunk based on the observation.
+the action_chunk is a list with 8 values, the first 7 represent the target joint angles, and the last one is the target gripper position.
+Sends action_chunk:
+Serializes the action_chunk and sends it back to the client.
+xarm_control.launch:
+This ROS launch file starts the camera_joint_control_node.py ROS node.
+move_xarm.py
+This is an example script that was created to move the robot.
+Its code has been integrated to camera_joint_control_node.py and therefore it is not used any more.
+CMakeLists.txt:
+This file tells catkin how to compile the xarm_control package
+The install command makes it so that the camera_joint_control_node.py file can be run.
+Data Flow:
+
+Gazebo Starts: Gazebo publishes camera data and joint states.
+camera_joint_control_node.py Starts: The ROS node starts and:
+Subscribes to camera and joint state topics.
+Connects to the external server using WebsocketClientPolicy.
+The robot moves to its initial position.
+starts the control_loop()
+control_loop() Execution:
+Data Gathering: The node receives data in the callbacks, and they are stored in the variables.
+Create observation: An observation is created, with the correct format.
+Send to Server: The observation is sent to the server using self.policy_client.infer().
+Receive action_chunk: The server returns an action_chunk.
+Convert to Trajectory: The action_chunk is converted to a JointTrajectory.
+Send Trajectory: The JointTrajectory is sent to the xArm.
+The log message is printed, with the inference time.
+Server Processes Data: The server receives the observation and generates the action_chunk.
+Robot Moves: The xArm's controller receives the trajectory and moves the robot in Gazebo.
+Repeat: The loop is repeated infinitely.
+Steps We've Taken (So Far):
+
+Initial Setup:
+Created the xarm_control ROS package.
+Set up the xarm7_beside_table.launch file to launch the Gazebo simulation.
+Created the xarm_control.launch file to launch the camera_joint_control_node.py script.
+Integrated the openpi_client package.
+Created the server.py file.
+Basic Communication:
+Set up the WebsocketClientPolicy to connect to the external server.
+Created a basic control_loop() to send and receive data.
+Added the joint state subscriber.
+Added the camera subscribers.
+Added an initial movement for the robot.
+Fixing Errors:
+ModuleNotFoundError: Fixed the errors related to missing Python libraries (typing_extensions, msgpack-numpy, websockets).
+/clock Issue: Corrected the xarm7_beside_table.launch file to ensure the /clock topic is published.
+Blocking call: Removed the blocking call wait_for_result() to allow the robot to move continuously.
+NoneType error Removed the depth image from the code.
+Incorrect camera names: The incorrect camera names caused the callbacks to not be executed, this was solved by modifying the names in camera_joint_control_node.py
+Refinement:
+Cleaned up CMakeLists.txt.
+Improved log messages for debugging.
+Corrected the camera topic names.
+Removed the use of depth images
+Removed the if statement in the control_loop()
+Added more log messages.
+The code now moves correctly to the initial position, and then moves continuously.
+How to Run the Project:
+
+Set up your ROS workspace:
+
+Make sure you have a catkin workspace (e.g., catkin_ws).
+Inside catkin_ws/src/, you should have:
+xarm_control package
+openpi_client package
+xarm_ros package
+Install the required packages:
+
+Open a terminal, and make sure you are in the correct python environment.
+Run the following command:
+content_copyterminal
+pip install msgpack-numpy msgpack typing-extensions websockets
+Build your ROS workspace:
+
+Navigate to catkin_ws/.
+Run:
+content_copyterminal
+catkin_make
+Source your ROS workspace:
+
+In every terminal you open, you will need to run this command:
+content_copyterminal
+source devel/setup.bash
+Run roscore:
+
+Open a new terminal.
+Run:
+content_copyterminal
+roscore
+Launch Gazebo:
+
+Open a new terminal.
+Source your workspace (source devel/setup.bash).
+Run:
+content_copyterminal
+roslaunch xarm_gazebo xarm7_beside_table.launch
+Run the inference server:
+
+Open a new terminal.
+Activate your conda environment.
+Run:
+content_copyterminal
+python3 server.py
+Launch the camera_joint_control_node:
+
+Open a new terminal.
+Source your workspace (source devel/setup.bash).
+Run:
+content_copyterminal
+roslaunch xarm_control xarm_control.launch
+Current State:
+
+At this point, we have a robust system that can:
+
+Launch the Gazebo simulation.
+Control the xArm7 robot.
+Receive camera images and joint states.
+Communicate with an external Python server using WebSockets.
+Send actions to the robot, making it move.

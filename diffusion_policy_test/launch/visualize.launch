@@ -1,0 +1,7 @@
+<launch>
+    <!-- Launch RViz with custom config -->
+    <node name="rviz" pkg="rviz" type="rviz" args="-d $(find diffusion_policy_test)/rviz/config.rviz" />
+
+    <!-- Launch policy visualizer -->
+    <node name="policy_visualizer" pkg="diffusion_policy_test" type="policy_visualizer.py" output="screen" />
+</launch>

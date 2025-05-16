@@ -1,0 +1,10 @@
+<launch>
+  <!-- Load the robot description (URDF) -->
+  <param name="robot_description" command="$(find xacro)/xacro $(find xarm_description)/urdf/xarm7/xarm7.urdf.xacro" />
+
+  <!-- Launch RViz with the specified configuration -->
+  <node name="rviz" pkg="rviz" type="rviz" args="-d $(find trajectory_testing)/config/rviz_config.rviz" />
+
+  <!-- Launch the trajectory publisher node -->
+  <node name="trajectory_publisher" pkg="trajectory_testing" type="trajectory_publisher.py" output="screen" />
+</launch>
