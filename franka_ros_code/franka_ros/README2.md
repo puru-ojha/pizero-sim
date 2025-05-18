@@ -1,0 +1,5 @@
+roslaunch franka_gazebo panda.launch controller:=position_joint_trajectory_controller
+roslaunch panda_policy_control panda_control.launch
+
+
+source devel/setup.bash

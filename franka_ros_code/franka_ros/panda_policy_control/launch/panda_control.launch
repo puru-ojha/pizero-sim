@@ -1,0 +1,8 @@
+<launch>
+  <!-- Launch your Franka Panda control node -->
+  <node 
+      pkg="panda_policy_control" 
+      type="panda_policy_node.py" 
+      name="panda_policy_node" 
+      output="screen" />
+</launch>

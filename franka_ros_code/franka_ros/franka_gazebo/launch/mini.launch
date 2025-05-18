@@ -1,0 +1,5 @@
+<launch>
+  <include file="$(find gazebo_ros)/launch/empty_world.launch"/>
+  <param name="robot_description" command="$(find xacro)/xacro $(find franka_description)/robots/panda/panda.urdf.xacro"/>
+  <node name="spawn_panda" pkg="gazebo_ros" type="spawn_model" args="-param robot_description -urdf -model panda" output="screen"/>
+</launch>

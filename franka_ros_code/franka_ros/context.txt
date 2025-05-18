@@ -1,0 +1,107 @@
+What We Have (Current State):
+
+Franka Emika Panda Simulation Package (franka_ros):
+
+franka_gazebo: A package within franka_ros specifically for simulating the Panda robot in Gazebo.
+panda.launch: The main launch file for starting the Panda simulation. It provides many options:
+Starting Gazebo (with or without GUI, paused or running).
+Choosing a world file.
+Spawning the robot with specific initial positions, poses, and configurations.
+Enabling/disabling the gripper.
+Selecting different example controllers.
+robot.launch: this file is included in the panda.launch file. It has the task of actually spawning the robot.
+panda_table_world.world: The newly created Gazebo world file that defines:
+A ground plane.
+A sun (for lighting).
+A table.
+Two boxes on the table.
+Physics properties (gravity, step size, etc.).
+panda.urdf.xacro: A macro-based URDF file that:
+Includes franka_robot.xacro (likely defining the core robot structure).
+Allows customization (arm ID, gripper, TCP offset, gazebo, etc.).
+References joint_limits.yaml (for joint limits).
+CMakeLists.txt: Defines how the franka_gazebo package should be built. It:
+Finds necessary ROS and external packages (Gazebo, ROS, KDL, Franka, etc.).
+Creates libraries (franka_hw_sim, franka_gripper_sim).
+Installs various files (plugins, launch, config).
+Handles code formatting and linting.
+franka_description: there are the urdf and other files that define the robot.
+xArm Simulation Package (xarm_ros):
+
+xarm_gazebo: A package for simulating the xArm robot in Gazebo.
+xarm_example1_table_copy.world: The Gazebo world file used for the xArm, which serves as a template for our new panda_table_world.world.
+xarm_control:
+
+This package contains the code of the control node.
+It contains a launch file and a config file.
+External Control Code:
+
+camera_joint_control_node.py: A ROS node (in xarm_control) that:
+Communicates with Gazebo to get camera images and joint states.
+Communicates with an external Python server (server.py).
+Sends commands to the robot.
+server.py: An external Python server that:
+Receives observations from the robot.
+Generates movement instructions.
+Sends the instructions back to the robot.
+The openpi_client is used to manage the communication between the camera_joint_control_node and the server.
+What We've Done (Recent Progress):
+
+Created panda_table_world.world:
+We successfully created a new world file based on xarm_example1_table_copy.world.
+It includes the ground plane, sun, table, two boxes, and physics properties.
+We removed the cylinder object, to match the original xarm_world.
+We kept the same position and orientation of the table and boxes.
+Modified panda.launch:
+We changed the panda.launch file to use the new panda_table_world.world file by default.
+We are now ready to spawn the panda robot in this new world.
+What We're Doing (Current Focus):
+
+Adapting the Control System:
+Our current focus is to adapt the existing external control system (using camera_joint_control_node.py and server.py) to work with the Panda robot.
+This involves:
+Changing ROS topic names for joint states and possibly cameras.
+Updating joint names in camera_joint_control_node.py.
+Modifying the trajectory message to work with the panda robot.
+Adjusting the default position of the robot.
+Creating a config file for the controllers.
+Creating a new launch file for the control node.
+What We Plan to Do (Next Steps):
+
+Create the new control config file: we need a file with the names of the controllers and joints.
+Modify camera_joint_control_node.py:
+Update joint state topic subscription (to /panda/joint_states).
+Update joint names (to panda_joint1, panda_joint2, etc.).
+Update the default position.
+Update the convert_action_to_trajectory function.
+Create the new control launch file: we will create a new launch file for the control node.
+Test the Panda in Gazebo:
+Launch the simulation using roslaunch franka_gazebo panda.launch.
+Verify that the Panda, table, and boxes are loaded in the panda_table_world.world environment.
+Test the Control System:
+Run server.py.
+Launch the new camera_joint_control_node.py with the new launch file.
+Observe the robot's behavior.
+Troubleshoot and iterate as needed.
+Overall Strategy:
+
+Reuse: We're reusing the existing control architecture as much as possible.
+Adapt: We're carefully adapting the code to fit the Panda robot's specifics.
+Incremental: We're making changes in small, manageable steps.
+Test-Driven: We're emphasizing testing after each change.
+Key Points:
+
+We've made excellent progress by creating the new world file and adapting the main launch file.
+We're now entering the critical phase of modifying the control code and testing everything together.
+The panda.urdf.xacro file defines the robot, and the CMakeLists.txt describes the build process, but we won't directly edit these files for our next tasks.
+
+
+What We've Done:
+
+Created panda_table_world.world: A Gazebo world file was created, setting up a table scene for the robot.
+Modified panda.launch: The main launch file was updated to use the new world file.
+Addressed Robot Spawning Issues: Redundant attempts to spawn the robot were removed from panda.launch, resolving the "model name panda already exists" error.
+Corrected URDF Inertial Properties: Missing inertial properties (mass and inertia tensor) in the panda.urdf file were identified and corrected. This resolved the warnings related to missing inertial data in the Gazebo output.
+Addressed Namespace Warning: A warning about a mismatch between the robot name in the launch file and the URDF was addressed by explicitly defining the <robotNamespace> in panda.urdf.xacro.
+
+The camera information is there in the franka_robot.xarco file as well as utils.xarco file
