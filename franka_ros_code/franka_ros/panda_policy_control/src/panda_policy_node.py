@@ -17,7 +17,7 @@ class CameraJointControlNode:
 
         # Initialize the bridge between ROS and OpenCV
         self.bridge = CvBridge()
-        self.open_loop_horizon = 10  # Number of actions to execute before fetching new inference
+        self.open_loop_horizon = 8  # Number of actions to execute before fetching new inference
 
         # --- Camera Subscriptions ---
         self.top_view_sub = rospy.Subscriber(
@@ -180,6 +180,7 @@ class CameraJointControlNode:
         # Default joint angles for Franka Panda (in radians)
         # This home position is chosen as a safe starting position (similar to those in the DROID Dataset).
         target_angles = [-0.1, -0.8, 0.7, -2.356194, 0.0, 1.5708, 0.085398]
+        # target_angles = [0.0, 0.0, 0.0, -2.356194, 0.0, 1.5708, 0.0]
 
         gripper_position = [0.04, 0.04]  # Open gripper
 
@@ -342,22 +343,22 @@ class CameraJointControlNode:
             # Ensure images are available
             if self.top_view_image is None:
                 rospy.logwarn("No image received from /panda_camera1/image_raw yet.")
-                rate.sleep()
+                # rate.sleep()
                 continue
 
             if self.gripper_image is None:
                 rospy.logwarn("No image received from /panda_camera2/image_raw yet.")
-                rate.sleep()
+                # rate.sleep()
                 continue
 
             # Prepare observation for the policy
             observation = {
-                "observation/exterior_image_1_left": image_tools.convert_to_uint8(
+                "observation/exterior_image_1_left": 
                     image_tools.resize_with_pad(self.top_view_image, 224, 224)
-                ),
-                "observation/wrist_image_left": image_tools.convert_to_uint8(
+                ,
+                "observation/wrist_image_left":
                     image_tools.resize_with_pad(self.gripper_image, 224, 224)
-                ),
+                ,
                 "observation/joint_position": self.joint_positions,
                 "observation/gripper_position": [(self.finger_joint1 + self.finger_joint2) / 2],
                 "prompt": "Pick up the marker and put it in the bowl"
@@ -375,6 +376,7 @@ class CameraJointControlNode:
                 rospy.loginfo(f"Processing action_chunk: shape {len(action_chunk), len(action_chunk[0])}")
                 # Only execute up to open_loop_horizon actions
                 for idx in range(self.open_loop_horizon):
+                    loop_time = time.time()
                     action = action_chunk[idx]
                     rospy.loginfo(f"Processing action index: {idx}")
                     # log current action chunk
@@ -389,7 +391,13 @@ class CameraJointControlNode:
                     rospy.loginfo(f"Gripper command: {gripper_command}")
                     self.send_trajectory(trajectory)
                     self.send_gripper_command(gripper_command[0], gripper_command[1])
-                    rate.sleep()  # Wait for next step
+                    loop_end_time = time.time()
+                    rospy.loginfo(f"Action execution time: {loop_end_time - loop_time:.3f} seconds")
+                    per_action_time = loop_end_time - loop_time
+                    if per_action_time < 1/15:
+                        rospy.loginfo(f"Sleeping for {1/15 - per_action_time:.3f} seconds")
+                        time.sleep(1/15 - per_action_time)
+                    # rate.sleep()  # Wait for next step
                 # Once done, report total execution time and counters
                 total_time = time.time() - self.task_start_time
                 rospy.loginfo(f"Total command execution time: {total_time:.3f} seconds")
@@ -400,7 +408,7 @@ class CameraJointControlNode:
                 action_chunk = None  
             else:
                 rospy.logwarn("No valid action chunk available, skipping execution")
-                rate.sleep()
+                # rate.sleep()
 
     def convert_action_to_trajectory_and_gripper(self, action_step):
         """
@@ -428,9 +436,13 @@ class CameraJointControlNode:
         # new_position = current_position + (velocity * dt)
         current_angles = self.joint_positions[:7]
         scale_factor = 1.0  # Experiment with different values
-        target_angles_rad = current_angles + scale_factor * action_step[:7] * dt
+
+        target_angles = current_angles + scale_factor * action_step[:7] * dt
+        # target_angles_rad = current_angles + scale_factor * action_step[:7] * dt
         
-        target_angles = np.degrees(target_angles_rad)
+        # target_angles = np.degrees(target_angles_rad)
+
+        print(f"Target angles (radians): {target_angles}")
 
 
         # Check joint limits and clip if necessary
