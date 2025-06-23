@@ -11,6 +11,7 @@
   <arg name="model1300" default="false" />
   <arg name="add_realsense_d435i" default="true" />
   <arg name="add_d435i_links" default="true" />
+  <!-- <arg name="use_gazebo_camera" default="true" doc="Enable the generic Gazebo camera for exterior view." /> -->
   <arg name="robot_sn" default="" />
 
   <arg name="xarm_velocity_control" value="$(eval arg('velocity_control') and not arg('run_demo'))" />
@@ -41,6 +42,7 @@
     respawn="false" output="screen"
     args="-gazebo_namespace /gazebo -urdf -model xarm7 -x -0.2 -y -0.6 -z 1.021 -Y 1.571 -param robot_description"/>
 
+
   <!-- load the corresponding controllers -->
   <include file="$(find xarm_controller)/launch/xarm7_control.launch">
     <arg name="run_demo_traj" value="$(arg run_demo)"/>
@@ -49,5 +51,16 @@
     <arg name="add_gripper" value="$(arg add_gripper)" />
     <arg name="namespace" value="$(arg namespace)" />
   </include>
+
+
+    <node name="spawn_bowl" pkg="gazebo_ros" type="spawn_model" output="screen"
+        args="-file /home/gunjan/.gazebo/models/bowl/model.sdf -sdf -model bowl
+              -x 0.2 -y -0.6 -z 1.021" />
+
+  <node name="spawn_marker_pen" pkg="gazebo_ros" type="spawn_model" output="screen"
+      args="-file /home/gunjan/.gazebo/models/marker_pen/model.sdf 
+            -sdf -model marker_pen 
+            -x 0.2 -y -1.0 -z 1.021" />
+
 
 </launch>

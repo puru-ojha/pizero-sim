@@ -1,0 +1,24 @@
+<launch>
+  <!-- 
+    This launch file spawns a standalone camera model into Gazebo.
+    The position and orientation can be adjusted via arguments.
+  -->
+  <arg name="camera_name" default="xarm_exterior_camera"/>
+  <arg name="x" default="0.8"/>
+  <arg name="y" default="-0.8"/>
+  <arg name="z" default="1.2"/>
+  <arg name="roll" default="0"/>
+  <arg name="pitch" default="0.4"/>
+  <arg name="yaw" default="2.35"/>
+
+  <!-- Load the URDF into the ROS Parameter Server -->
+  <param name="exterior_camera_description"
+         command="$(find xacro)/xacro '$(find xarm_description)/urdf/exterior_camera.urdf.xacro'
+                    camera_name:=$(arg camera_name)
+                    camera_x:=$(arg x) camera_y:=$(arg y) camera_z:=$(arg z)
+                    camera_roll:=$(arg roll) camera_pitch:=$(arg pitch) camera_yaw:=$(arg yaw)"/>
+
+  <!-- Spawn the camera model in Gazebo -->
+  <node name="urdf_spawner_exterior_camera" pkg="gazebo_ros" type="spawn_model" respawn="false" output="screen"
+        args="-urdf -model $(arg camera_name) -param exterior_camera_description"/>
+</launch>

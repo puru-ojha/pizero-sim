@@ -113,11 +113,11 @@ class CameraJointControlNode:
 
     # --- Camera Callbacks ---
     def top_view_callback(self, msg):
-        cv_image = self.bridge.imgmsg_to_cv2(msg, desired_encoding='bgr8')
+        cv_image = self.bridge.imgmsg_to_cv2(msg, desired_encoding='rgb8')
         self.top_view_image = cv_image
 
     def gripper_camera_callback(self, msg):
-        cv_image = self.bridge.imgmsg_to_cv2(msg, desired_encoding='bgr8')
+        cv_image = self.bridge.imgmsg_to_cv2(msg, desired_encoding='rgb8')
         self.gripper_image = cv_image
 
     # --- Joint State Callback ---

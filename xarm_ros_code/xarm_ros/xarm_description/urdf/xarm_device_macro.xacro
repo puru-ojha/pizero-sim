@@ -38,7 +38,7 @@
     baud_checkset:=true
     default_gripper_baud:=2000000 
     model1300:=false
-    robot_sn:='' 
+    robot_sn:=''
     mesh_suffix:='stl' 
     kinematics_suffix:=''
     "

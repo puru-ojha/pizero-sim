@@ -12,6 +12,9 @@ import time
 
 class CameraJointControlNode:
     def __init__(self):
+
+        self.open_loop_horizon = 8
+
         rospy.init_node('camera_joint_control_node', anonymous=True)
         rospy.loginfo('camera_joint_control_node started')
 
@@ -146,7 +149,7 @@ class CameraJointControlNode:
 
     def control_loop(self):
         rospy.loginfo('Starting main control loop')
-        rate = rospy.Rate(10)  # 1 Hz - Adjust the frequency as needed
+        rate = rospy.Rate(15)  # 15 Hz - Adjust the frequency as needed
         
         while not rospy.is_shutdown():
             # Prepare observation data for the policy
@@ -184,45 +187,68 @@ class CameraJointControlNode:
             if self.policy_client is not None:
                 # Get the trajectory from the policy
                 start = time.time()
-                action_chunk = self.policy_client.infer(observation)["actions"]
+                action_chunks = self.policy_client.infer(observation)["actions"]
                 end = time.time()
 
                 rospy.loginfo(f"Inference time: {end-start}")
+                rospy.loginfo(f"Received action chunks with shape: {action_chunks.shape}")
 
-                # Convert action chunk to JointTrajectory
-                trajectory, gripper_state = self.convert_action_to_trajectory(action_chunk)
-                self.gripper_state = gripper_state
-                # Send the trajectory to the xArm
-                self.send_trajectory(trajectory)
+                # Iterate through action chunks up to open_loop_horizon
+                for i in range(min(self.open_loop_horizon, len(action_chunks))):
+                    # Convert action chunk to JointTrajectory
+                    trajectory = self.convert_action_to_trajectory(action_chunks[i])
+                    # Send the trajectory to the xArm
+                    self.send_trajectory(trajectory)
             else:
                 rospy.logwarn("Policy client is not connected, skipping inference")
             rate.sleep()
 
-    def convert_action_to_trajectory(self, action_chunk):
-        """Converts the action chunk received from the server to a JointTrajectory."""
-        # Assuming action chunk is a numpy array of 7 joint angles (or a list)
-        if isinstance(action_chunk, list):
-            action_chunk = np.array(action_chunk)
+    def convert_action_to_angles_and_gripper(self, action_step):
+        if isinstance(action_step, list):
+            action_step = np.array(action_step)
+        dt = 1 / 15.0  # Time step in seconds.
 
-        # The dimensions of action_chunk is
-        print(action_chunk.shape)
-        
-        target_angles = action_chunk[0][:7]  # use the first 7 value in the array, for the joints
-        gripper_state = int(action_chunk[0][7]) # the eigth value will be the gripper position
+
+        current_angles = self.joint_positions  # Current joint angles (degrees)
+        scale_factor = 1.0  # Adjust scaling as needed
+
+
+        # Integrate velocities to compute target angles.
+        target_angles = current_angles + scale_factor * action_step[:7] * dt
+        print(f"The difference between target and current is {target_angles - current_angles}")
+        target_angles = self.check_joint_limits(target_angles)
+
+        # Process gripper command (last value)
+        gripper_val = action_step[7]
+        if gripper_val < 0.0:
+            gripper_command = 0.0
+        elif gripper_val > 1.0:
+            gripper_command = 0.04
+        else:
+            gripper_command = gripper_val * 0.04
 
         # Create JointTrajectory message
         traj_msg = JointTrajectory()
         traj_msg.joint_names = self.joint_names
 
+        '''
+        # Create a trajectory point
+        point = JointTrajectoryPoint()
+        point.velocities = joint_velocities  # Set joint velocities
+        point.time_from_start = rospy.Duration(0.1)  # Shorter duration for velocity commands
+        '''
+
         # Create a trajectory point
         point = JointTrajectoryPoint()
         point.positions = target_angles
-        point.time_from_start = rospy.Duration(5)  # Move in 5 seconds
+        point.time_from_start = rospy.Duration(1/15)  # Move in 1/15 seconds
 
-        # Append the point to the trajectory
-        traj_msg.points.append(point)
 
-        return traj_msg, gripper_state
+        return traj_msg, gripper_command
+
+
+
+
 if __name__ == '__main__':
     try:
         CameraJointControlNode()
