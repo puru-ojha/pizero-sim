@@ -24,15 +24,15 @@ class CameraJointControlNode:
         # --- Camera Subscriptions ---
         # Gazebo Camera
         self.camera_image_subscriber_gazebo = rospy.Subscriber(
-            '/camera/image_raw', Image, self.camera_image_callback_gazebo, queue_size=10)
+            '/xarm_exterior_camera/image_raw', Image, self.camera_image_callback_gazebo, queue_size=10)
         self.camera_info_subscriber_gazebo = rospy.Subscriber(
-            '/camera/camera_info', CameraInfo, self.camera_info_callback_gazebo, queue_size=10)
+            '/xarm_exterior_camera/camera_info', CameraInfo, self.camera_info_callback_gazebo, queue_size=10)
 
         # RealSense Camera (Color)
         self.camera_image_subscriber_realsense_color = rospy.Subscriber(
-            '/arm_camera/camera/image_raw', Image, self.camera_image_callback_realsense_color, queue_size=10)
+            '/realsense_gazebo_camera/color/image_raw', Image, self.camera_image_callback_realsense_color, queue_size=10)
         self.camera_info_subscriber_realsense_color = rospy.Subscriber(
-            '/arm_camera/camera/camera_info', CameraInfo, self.camera_info_callback_realsense_color, queue_size=10)
+            '/realsense_gazebo_camera/color/camera_info', CameraInfo, self.camera_info_callback_realsense_color, queue_size=10)
 
         # --- Joint State Subscription ---
         self.joint_state_subscriber = rospy.Subscriber(
@@ -86,7 +86,7 @@ class CameraJointControlNode:
     def camera_image_callback_gazebo(self, msg):
         #rospy.loginfo(f'Received camera image (gazebo) with size: {len(msg.data)}')
         # Convert the image message to an OpenCV image
-        cv_image = self.bridge.imgmsg_to_cv2(msg, desired_encoding='bgr8')
+        cv_image = self.bridge.imgmsg_to_cv2(msg, desired_encoding='rgb8')
         self.camera_image_gazebo = cv_image
 
     def camera_info_callback_gazebo(self, msg):
@@ -96,7 +96,7 @@ class CameraJointControlNode:
     def camera_image_callback_realsense_color(self, msg):
         #rospy.loginfo(f'Received camera image (realsense color) with size: {len(msg.data)}')
         # Convert the image message to an OpenCV image
-        cv_image = self.bridge.imgmsg_to_cv2(msg, desired_encoding='bgr8')
+        cv_image = self.bridge.imgmsg_to_cv2(msg, desired_encoding='rgb8')
         self.camera_image_realsense_color = cv_image
 
     def camera_info_callback_realsense_color(self, msg):
