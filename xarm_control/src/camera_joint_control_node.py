@@ -14,6 +14,14 @@ import time
 class CameraJointControlNode:
     def __init__(self):
 
+
+
+        # Define the joint names for the xArm
+        self.joint_names = [
+        "joint1", "joint2", "joint3", "joint4", 
+        "joint5", "joint6", "joint7"
+        ]
+
         self.open_loop_horizon = 8
 
         rospy.init_node('camera_joint_control_node', anonymous=True)
@@ -70,10 +78,7 @@ class CameraJointControlNode:
         # We store the last commanded pulse value.
         self.gripper_pulse_state = 0.0
 
-        self.joint_names = [
-        "joint1", "joint2", "joint3", "joint4", 
-        "joint5", "joint6", "joint7"
-        ]
+        
 
         # Move the robot to the default position
         if self.action_server_connected: #only move to default position if the connection is ok.
@@ -115,10 +120,12 @@ class CameraJointControlNode:
 
     # --- Joint State Callback ---
     def joint_state_callback(self, msg):
-        #rospy.loginfo(f'Received joint states:')
+        # rospy.loginfo(f"Received joint names: {msg.name}")
         self.joint_array = np.array(msg.position)
-        self.joint_positions = self.joint_array[:7]  # Assuming the first 7 joints are relevant
-        self.gripper_pulse_state = self.joint_array[7]/850
+        # Make sure to map joints in the correct order
+        self.joint_positions = np.array([
+            msg.position[msg.name.index(joint)] for joint in self.joint_names
+        ])
 
 
     # --- Action Client Methods ---
@@ -131,14 +138,14 @@ class CameraJointControlNode:
         if self.action_server_connected:
             self.action_client.send_goal(goal_msg)
             # This makes the call blocking, ensuring one action step completes before the next begins.
-            self.action_client.wait_for_result()
-            result = self.action_client.get_result()
-            if result and result.error_code == result.SUCCESSFUL:
-                rospy.loginfo("Trajectory execution successful.")
-            else:
-                rospy.logwarn(f"Trajectory execution failed with error code: {result.error_code if result else 'N/A'}")
-        else:
-            rospy.logerr(f"Action server is down, could not send goal: {goal_msg}")
+        #     self.action_client.wait_for_result()
+        #     result = self.action_client.get_result()
+        #     if result and result.error_code == result.SUCCESSFUL:
+        #         rospy.loginfo("Trajectory execution successful.")
+        #     else:
+        #         rospy.logwarn(f"Trajectory execution failed with error code: {result.error_code if result else 'N/A'}")
+        # else:
+        #     rospy.logerr(f"Action server is down, could not send goal: {goal_msg}")
     
     def move_to_default_position(self):
         rospy.loginfo("Moving to default position...")
@@ -199,7 +206,7 @@ class CameraJointControlNode:
                 "observation/joint_position": self.joint_positions,
                 # Normalize gripper state for the policy (0-850 -> 0-1)
                 "observation/gripper_position": [self.gripper_pulse_state],
-                "prompt": "Pick up the marker and put it in the bowl",
+                "prompt": "Pick up the red marker and put it in the white bowl",
             }
 
             # Get new actions from policy if we are done with the last chunk
