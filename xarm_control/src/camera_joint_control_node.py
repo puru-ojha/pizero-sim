@@ -10,6 +10,8 @@ from cv_bridge import CvBridge
 from openpi_client import image_tools
 from openpi_client.websocket_client_policy import WebsocketClientPolicy
 import time
+import threading
+import queue
 
 class CameraJointControlNode:
     def __init__(self):
@@ -92,10 +94,19 @@ class CameraJointControlNode:
         except Exception as e:
             rospy.logerr(f"Could not connect to policy server: {e}")
 
-        # Start control loop
+        # Add queue for communication between threads
+        self.action_queue = queue.Queue(maxsize=1)
+        
+        # Start inference and execution threads
+        self.inference_thread = threading.Thread(target=self.inference_loop)
+        self.execution_thread = threading.Thread(target=self.execution_loop)
+        
+        self.inference_thread.daemon = True
+        self.execution_thread.daemon = True
+        
         if self.action_server_connected and self.policy_client is not None:
-            print("action server is connected and policy client is also there") #only start the control loop if the connection is ok.
-            self.control_loop()
+            self.inference_thread.start()
+            self.execution_thread.start()
 
     # --- Camera Callbacks ---
     def camera_image_callback_gazebo(self, msg):
@@ -183,76 +194,73 @@ class CameraJointControlNode:
         else:
             rospy.logwarn("xArm Gripper action server not available, skipping gripper command.")
 
-    def control_loop(self):
-        rospy.loginfo('Starting main control loop')
-        rate = rospy.Rate(15)  # 15 Hz, should match dt in conversion function
-        action_chunks = None
+    def get_observation(self):
+        return {
+            "observation/exterior_image_1_left": 
+                image_tools.resize_with_pad(self.camera_image_gazebo, 224, 224),
+            "observation/wrist_image_left": 
+                image_tools.resize_with_pad(self.camera_image_realsense_color, 224, 224),
+            "observation/joint_position": self.joint_positions,
+            "observation/gripper_position": [self.gripper_pulse_state],
+            "prompt": "Pick up the red marker and put it in the white bowl",
+        }
 
+    def inference_loop(self):
+        rate = rospy.Rate(2)  # 2 Hz - one inference every 0.5 seconds
+        
         while not rospy.is_shutdown():
-            # Wait for all sensor data to be available
-            if self.camera_image_gazebo is None or self.camera_image_realsense_color is None or self.joint_positions is None:
-                rospy.logwarn_throttle(5, "Waiting for sensor data...")
+            # Wait for sensor data - check if data exists and is valid
+            if (self.camera_image_gazebo is None or 
+                self.camera_image_realsense_color is None or 
+                self.joint_positions is None):
                 rate.sleep()
                 continue
-
-            # Prepare observation data for the policy
-            observation = {
-                "observation/exterior_image_1_left": 
-                    image_tools.resize_with_pad(self.camera_image_gazebo, 224, 224)
-                ,
-                "observation/wrist_image_left": 
-                    image_tools.resize_with_pad(self.camera_image_realsense_color, 224, 224)
-                ,
-                "observation/joint_position": self.joint_positions,
-                # Normalize gripper state for the policy (0-850 -> 0-1)
-                "observation/gripper_position": [self.gripper_pulse_state],
-                "prompt": "Pick up the red marker and put it in the white bowl",
-            }
-
-            # Get new actions from policy if we are done with the last chunk
-            if self.policy_client is not None and action_chunks is None:
+            
+            # Get inference
+            try:
                 start_time = time.time()
+                observation = self.get_observation()
+                actions = self.policy_client.infer(observation)["actions"]
+                end_time = time.time()
+                
+                rospy.loginfo(f"Inference time: {end_time - start_time:.3f}s")
+                
+                # Put new actions in queue, replace old ones if necessary
+                if self.action_queue.full():
+                    _ = self.action_queue.get_nowait()  # Remove old actions
+                self.action_queue.put_nowait(actions)
+                
+            except Exception as e:
+                rospy.logerr(f"Inference failed: {e}")
+    
+        rate.sleep()
+
+    def execution_loop(self):
+        rate = rospy.Rate(15)  # 15 Hz
+        current_actions = None
+        action_index = 0
+        
+        while not rospy.is_shutdown():
+            # Get new actions if needed
+            if current_actions is None or action_index >= self.open_loop_horizon:
                 try:
-                    action_chunks = self.policy_client.infer(observation)["actions"]
-                    end_time = time.time()
-                    rospy.loginfo(f"Inference time: {end_time - start_time:.3f}s. Received action chunks with shape: {np.array(action_chunks).shape}")
-                except Exception as e:
-                    rospy.logerr(f"Failed to get inference from policy server: {e}")
-                    action_chunks = None  # Ensure we don't proceed with old data
+                    current_actions = self.action_queue.get_nowait()
+                    action_index = 0
+                except queue.Empty:
+                    rospy.logwarn_throttle(1, "Waiting for actions...")
                     rate.sleep()
                     continue
-
-            # Execute the chunk of actions
-            if action_chunks is not None:
-                num_actions_to_execute = min(self.open_loop_horizon, len(action_chunks))
-                rospy.loginfo(f"Executing {num_actions_to_execute} actions from the chunk.")
-
-                for i in range(num_actions_to_execute):
-                    action_step = action_chunks[i]
-                    
-                    # Convert action step to trajectory and gripper command
-                    trajectory, gripper_command = self.convert_action_to_trajectory_and_gripper(action_step)
-                    print("the initial position is ", self.joint_positions)
-                    print("the action step is", action_step)
-                    print("the final position is", trajectory.points)
-
-                    if trajectory is None:
-                        rospy.logerr("Failed to convert action to trajectory. Skipping step.")
-                        continue
-                    
-                    # Send commands to the robot
-                    self.send_trajectory(trajectory)
-                    self.send_xarm_gripper_command(gripper_command)
-                    
-
-                    # Maintain control rate
-                    rate.sleep()
-                
-                # We've used this chunk, so clear it to fetch a new one
-                action_chunks = None
-            else:
-                rospy.logwarn_throttle(5, "No valid action chunk available, skipping execution cycle.")
-                rate.sleep()
+            
+            # Execute current action
+            action_step = current_actions[action_index]
+            trajectory, gripper_command = self.convert_action_to_trajectory_and_gripper(action_step)
+            
+            if trajectory is not None:
+                self.send_trajectory(trajectory)
+                self.send_xarm_gripper_command(gripper_command)
+            
+            action_index += 1
+            rate.sleep()
 
     def convert_action_to_trajectory_and_gripper(self, action_step):
         if isinstance(action_step, list):
