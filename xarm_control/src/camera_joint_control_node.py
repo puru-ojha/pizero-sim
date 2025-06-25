@@ -2,9 +2,8 @@
 import rospy
 from sensor_msgs.msg import Image, JointState, CameraInfo
 from trajectory_msgs.msg import JointTrajectory, JointTrajectoryPoint
-from control_msgs.msg import FollowJointTrajectoryAction, FollowJointTrajectoryGoal, JointTolerance
-from xarm_gripper.msg import MoveAction, MoveGoal
-from actionlib import SimpleActionClient # Import for gripper action
+from control_msgs.msg import FollowJointTrajectoryAction, FollowJointTrajectoryGoal
+from actionlib import SimpleActionClient
 import numpy as np
 from cv_bridge import CvBridge
 from openpi_client import image_tools
@@ -64,10 +63,18 @@ class CameraJointControlNode:
         # --- Gripper Action Client ---
         # Assuming xarm_gripper.msg.MoveAction is available (you might need to add xarm_gripper to your package dependencies)
         
-        self.gripper_action_client = SimpleActionClient('/xarm/gripper_move', MoveAction)
-        self.gripper_action_client.wait_for_server(rospy.Duration(5)) # Wait for gripper action server
+        self.gripper_action_client = SimpleActionClient(
+            '/xarm/gripper_traj_controller/follow_joint_trajectory', 
+            FollowJointTrajectoryAction
+        )
+        if self.gripper_action_client.wait_for_server(rospy.Duration(5)):
+            rospy.loginfo("Gripper trajectory controller connected")
+        else:
+            rospy.logwarn("Gripper trajectory controller not available")
 
-
+        # Add gripper joint name
+        self.gripper_joint_name = "drive_joint"  # Update this if different
+        
         # --- Variables to store data ---
         self.joint_array = None
         self.joint_positions = None
@@ -179,20 +186,35 @@ class CameraJointControlNode:
         rospy.sleep(5) #Wait for the robot to arrive at the position
         rospy.loginfo("Arrived at default position")
 
-    def send_xarm_gripper_command(self, target_pulse, pulse_speed=1500):
+    def send_xarm_gripper_command(self, target_position, duration=0.5):
         """
-        Sends a command to the xArm gripper action server.
-        target_pulse: int, desired gripper position (0-850, 0=closed, 850=open)
-        pulse_speed: int, desired gripper speed (1-5000)
+        Sends a command to the xArm gripper using trajectory controller.
+        target_position: float, desired gripper position (0-0.85 meters)
+        duration: float, time to reach target position in seconds
         """
-        if self.gripper_action_client.wait_for_server(rospy.Duration(1)): # Short wait for quick checks
-            goal = MoveGoal()
-            goal.target_pulse = float(target_pulse)
-            goal.pulse_speed = float(pulse_speed)
-            rospy.loginfo(f"Sending xArm gripper command: position={target_pulse}, speed={pulse_speed}")
-            self.gripper_action_client.send_goal(goal)
-        else:
-            rospy.logwarn("xArm Gripper action server not available, skipping gripper command.")
+        if not self.gripper_action_client.wait_for_server(rospy.Duration(1)):
+            rospy.logwarn("Gripper trajectory controller not available")
+            return
+
+        # Create trajectory goal
+        goal = FollowJointTrajectoryGoal()
+        
+        # Set joint names
+        traj = JointTrajectory()
+        traj.joint_names = [self.gripper_joint_name]
+        
+        # Create trajectory point
+        point = JointTrajectoryPoint()
+        point.positions = [target_position]  # Single joint position
+        point.velocities = [0.0]  # Zero velocity at goal
+        point.time_from_start = rospy.Duration(duration)
+        
+        # Add point to trajectory
+        traj.points.append(point)
+        goal.trajectory = traj
+        
+        rospy.loginfo(f"Sending gripper command: position={target_position}")
+        self.gripper_action_client.send_goal(goal)
 
     def get_observation(self):
         return {
@@ -285,9 +307,7 @@ class CameraJointControlNode:
         # Policy output for gripper is assumed to be normalized in [0, 1].
         # We map this to the xArm gripper's pulse range [0, 850].
         gripper_val = action_step[7]
-        
-        # Clip the value to be safe and map to the physical range
-        gripper_command = np.clip(gripper_val, 0.0, 1.0) * 850.0
+        gripper_command = np.clip(gripper_val, 0.0, 1.0) * 0.85  # 0.85 meters is fully open
 
         # Create JointTrajectory message
         traj_msg = JointTrajectory()
