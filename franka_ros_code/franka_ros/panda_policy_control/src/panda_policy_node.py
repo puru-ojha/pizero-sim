@@ -9,6 +9,8 @@ from cv_bridge import CvBridge
 from openpi_client import image_tools
 from openpi_client.websocket_client_policy import WebsocketClientPolicy
 import time
+import threading
+import queue
 
 class CameraJointControlNode:
     def __init__(self):
@@ -106,10 +108,22 @@ class CameraJointControlNode:
             rospy.logerr(f"Could not connect to policy server: {e}")
             self.policy_client = None
 
-        # Start control loop only if both connections are valid.
+        # Add queue for communication between threads
+        self.action_queue = queue.Queue(maxsize=1)
+        
+        # Start inference and execution threads
+        self.inference_thread = threading.Thread(target=self.inference_loop)
+        self.execution_thread = threading.Thread(target=self.execution_loop)
+        
+        self.inference_thread.daemon = True
+        self.execution_thread.daemon = True
+        
+        # Start control threads only if both connections are valid
         if self.action_server_connected and self.policy_client is not None:
-            rospy.loginfo("Starting control loop")
-            self.control_loop()
+            rospy.loginfo("Starting control threads")
+            self.inference_thread.start()
+            self.execution_thread.start()
+
 
     # --- Camera Callbacks ---
     def top_view_callback(self, msg):
@@ -131,7 +145,9 @@ class CameraJointControlNode:
             self.finger_joint2 = msg.position[1]
 
     # --- Action Client Methods ---
-    def send_trajectory(self, trajectory):
+    # Send trajectory and gripper commands to the action server
+
+    def send_trajectory_nonblocking(self, trajectory):
         goal_msg = FollowJointTrajectoryGoal()
         goal_msg.trajectory = trajectory
 
@@ -145,33 +161,20 @@ class CameraJointControlNode:
         rospy.loginfo("Sending joint trajectory")
         if self.action_server_connected:
             self.action_client.send_goal(goal_msg)
-            self.action_client.wait_for_result()
-            result = self.action_client.get_result()
-            if result:
-                rospy.loginfo(f"Joint trajectory result: {result}")
-                rospy.loginfo(f"Current joint positions: {self.joint_positions}")
-            else:
-                rospy.logerr("Failed to execute joint trajectory")
         else:
             rospy.logerr("Joint action server is down, could not send goal")
 
-    def send_gripper_command(self, finger_joint1, finger_joint2):
+    def send_gripper_command_nonblocking(self, finger_joint1, finger_joint2):
         # Clamp gripper commands to valid range
         finger_joint1 = max(0.0, min(finger_joint1, 0.04))
         finger_joint2 = max(0.0, min(finger_joint2, 0.04))
         goal_msg = GripperCommandGoal()
         goal_msg.command.position = (finger_joint1 + finger_joint2) / 2.0
         goal_msg.command.max_effort = 10.0
+        
         rospy.loginfo(f"Sending gripper command: position={goal_msg.command.position}")
         if self.gripper_action_client.wait_for_server(rospy.Duration(5)):
             self.gripper_action_client.send_goal(goal_msg)
-            self.gripper_action_client.wait_for_result()
-            result = self.gripper_action_client.get_result()
-            if result:
-                rospy.loginfo(f"Gripper command result: {result}")
-                rospy.loginfo(f"Current gripper position: {goal_msg.command.position}")
-            else:
-                rospy.logerr("Failed to execute gripper command")
         else:
             rospy.logerr("Gripper action server is down, could not send goal")
 
@@ -193,8 +196,8 @@ class CameraJointControlNode:
         rospy.loginfo(f"Default joint positions: {point.positions}")
 
         traj_msg.points.append(point)
-        self.send_trajectory(traj_msg)
-        self.send_gripper_command(gripper_position[0], gripper_position[1])
+        self.send_trajectory_nonblocking(traj_msg)
+        self.send_gripper_command_nonblocking(gripper_position[0], gripper_position[1])
         rospy.sleep(5)
         rospy.loginfo("Arrived at default position")
 
@@ -334,81 +337,95 @@ class CameraJointControlNode:
         else:
             return False
 
-    # --- Main Control Loop ---
-    def control_loop(self):
-        rate = rospy.Rate(15)  # 15 Hz control loop
-        action_chunk = None
 
+    #Main inference and execution loops
+    # These loops run in separate threads to allow for real-time inference and execution
+    # Inference loop fetches images and joint states, prepares observations, and sends them to the policy server.
+    # Execution loop fetches actions from the queue and executes them on the robot
+    # using the action client. It also handles gripper commands based on the actions received.
+    # The loops run at different rates to balance the workload and ensure timely execution of actions.
+    # The inference loop runs at 2 Hz, while the execution loop runs at 15 Hz.
+    # The inference loop uses a queue to communicate with the execution loop, allowing for non-blocking action execution.
+    def inference_loop(self):
+        rate = rospy.Rate(2)  # 2 Hz inference rate
+        
         while not rospy.is_shutdown():
             # Ensure images are available
             if self.top_view_image is None:
-                rospy.logwarn("No image received from /panda_camera1/image_raw yet.")
-                # rate.sleep()
+                rospy.logwarn_throttle(1, "No image received from /panda_camera1/image_raw yet.")
+                rate.sleep()
                 continue
 
             if self.gripper_image is None:
-                rospy.logwarn("No image received from /panda_camera2/image_raw yet.")
-                # rate.sleep()
+                rospy.logwarn_throttle(1, "No image received from /panda_camera2/image_raw yet.")
+                rate.sleep()
                 continue
 
             # Prepare observation for the policy
             observation = {
                 "observation/exterior_image_1_left": 
-                    image_tools.resize_with_pad(self.top_view_image, 224, 224)
-                ,
+                    image_tools.resize_with_pad(self.top_view_image, 224, 224),
                 "observation/wrist_image_left":
-                    image_tools.resize_with_pad(self.gripper_image, 224, 224)
-                ,
+                    image_tools.resize_with_pad(self.gripper_image, 224, 224),
                 "observation/joint_position": self.joint_positions,
                 "observation/gripper_position": [(self.finger_joint1 + self.finger_joint2) / 2],
-                "prompt": "Pick up the marker and put it in the bowl"
+                "prompt": "Pick up the red marker and put it in the white bowl"
             }
 
-            if self.policy_client is not None and action_chunk is None:
+            try:
                 start_inference = time.time()
                 action_chunk = self.policy_client.infer(observation)["actions"]
                 end_inference = time.time()
-                # Round each action (inner list) to 3 decimal places
+                
+                # Round each action to 3 decimal places
                 action_chunk = [np.round(action, 3).tolist() for action in action_chunk]
                 rospy.loginfo(f"Inference time: {end_inference - start_inference:.3f} seconds")
+                
+                # Put new actions in queue, replace old ones if necessary
+                if self.action_queue.full():
+                    _ = self.action_queue.get_nowait()  # Remove old actions
+                self.action_queue.put_nowait(action_chunk)
+                
+            except Exception as e:
+                rospy.logerr(f"Inference failed: {e}")
+            
+            rate.sleep()
 
-            if action_chunk is not None:
-                rospy.loginfo(f"Processing action_chunk: shape {len(action_chunk), len(action_chunk[0])}")
-                # Only execute up to open_loop_horizon actions
-                for idx in range(self.open_loop_horizon):
-                    loop_time = time.time()
-                    action = action_chunk[idx]
-                    rospy.loginfo(f"Processing action index: {idx}")
-                    # log current action chunk
-                    rospy.loginfo(f"Action: {action}")
-                    action = np.clip(action, -1, 1)
-                    traj_and_gripper = self.convert_action_to_trajectory_and_gripper(action)
-                    if traj_and_gripper is None:
-                        rospy.logerr("Conversion of action to trajectory failed.")
-                        continue
-                    trajectory, gripper_command = traj_and_gripper
-                    rospy.loginfo(f"Trajectory: {trajectory.points[0].positions}")
-                    rospy.loginfo(f"Gripper command: {gripper_command}")
-                    self.send_trajectory(trajectory)
-                    self.send_gripper_command(gripper_command[0], gripper_command[1])
-                    loop_end_time = time.time()
-                    rospy.loginfo(f"Action execution time: {loop_end_time - loop_time:.3f} seconds")
-                    per_action_time = loop_end_time - loop_time
-                    if per_action_time < 1/15:
-                        rospy.loginfo(f"Sleeping for {1/15 - per_action_time:.3f} seconds")
-                        time.sleep(1/15 - per_action_time)
-                    # rate.sleep()  # Wait for next step
-                # Once done, report total execution time and counters
-                total_time = time.time() - self.task_start_time
-                rospy.loginfo(f"Total command execution time: {total_time:.3f} seconds")
-                rospy.loginfo(f"Joint limit violations: {self.joint_limit_violation_count}")
-                rospy.loginfo(f"Velocity limit violations: {self.velocity_violation_count}")
-                rospy.loginfo(f"Self collision count: {self.self_collision_count}")
-                rospy.loginfo(f"Singularity warnings: {self.singularity_count}")
-                action_chunk = None  
-            else:
-                rospy.logwarn("No valid action chunk available, skipping execution")
-                # rate.sleep()
+    def execution_loop(self):
+        rate = rospy.Rate(15)  # 15 Hz execution rate
+        current_actions = None
+        action_index = 0
+        
+        while not rospy.is_shutdown():
+            # Get new actions if needed
+            if current_actions is None or action_index >= self.open_loop_horizon:
+                try:
+                    current_actions = self.action_queue.get_nowait()
+                    action_index = 0
+                except queue.Empty:
+                    rospy.logwarn_throttle(1, "Waiting for actions...")
+                    rate.sleep()
+                    continue
+            
+            # Execute current action
+            action = current_actions[action_index]
+            rospy.loginfo(f"Processing action index: {action_index}")
+            rospy.loginfo(f"Action: {action}")
+            
+            action = np.clip(action, -1, 1)
+            traj_and_gripper = self.convert_action_to_trajectory_and_gripper(action)
+            
+            if traj_and_gripper is not None:
+                trajectory, gripper_command = traj_and_gripper
+                rospy.loginfo(f"Trajectory: {trajectory.points[0].positions}")
+                rospy.loginfo(f"Gripper command: {gripper_command}")
+                
+                # Non-blocking action execution
+                self.send_trajectory_nonblocking(trajectory)
+                self.send_gripper_command_nonblocking(gripper_command[0], gripper_command[1])
+            
+            action_index += 1
+            rate.sleep()
 
     def convert_action_to_trajectory_and_gripper(self, action_step):
         """
