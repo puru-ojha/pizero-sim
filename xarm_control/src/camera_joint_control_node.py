@@ -4,6 +4,7 @@ from sensor_msgs.msg import Image, JointState, CameraInfo
 from trajectory_msgs.msg import JointTrajectory, JointTrajectoryPoint
 from control_msgs.msg import FollowJointTrajectoryAction, FollowJointTrajectoryGoal
 from actionlib import SimpleActionClient
+from scipy.spatial.transform import Rotation
 import numpy as np
 from cv_bridge import CvBridge
 from openpi_client import image_tools
@@ -11,6 +12,23 @@ from openpi_client.websocket_client_policy import WebsocketClientPolicy
 import time
 import threading
 import queue
+import modern_robotics as mr
+
+# Franka DH parameters
+FRANKA_DH = {
+    'd': [0.333, 0, 0.316, 0, 0.384, 0, 0],
+    'a': [0, 0, 0, 0.0825, -0.0825, 0, 0.088],
+    'alpha': [0, -np.pi/2, np.pi/2, np.pi/2, -np.pi/2, np.pi/2, np.pi/2],
+    'offset': [0, 0, 0, 0, 0, 0, 0]
+}
+
+# xArm DH parameters
+XARM_DH = {
+    'd': [0.267, 0, 0.293, 0, 0.3425, 0, 0.076],
+    'a': [0, 0, 0, 0, 0, 0, 0],
+    'alpha': [-np.pi/2, np.pi/2, -np.pi/2, np.pi/2, -np.pi/2, np.pi/2, 0],
+    'offset': [0, 0, 0, 0, 0, 0, 0]
+}
 
 class CameraJointControlNode:
     def __init__(self):
@@ -217,12 +235,25 @@ class CameraJointControlNode:
         self.gripper_action_client.send_goal(goal)
 
     def get_observation(self):
+        """
+        Returns observation with xArm images but Franka joint angles
+        """
+        if self.joint_positions is None:
+            return None
+        
+        # Convert xArm joints to Franka end-effector pose
+        xarm_pose, _ = self.compute_fk(self.joint_positions, XARM_DH)
+        
+        # Use IK to get corresponding Franka joints
+        # This could be replaced with a more efficient mapping if needed
+        franka_joints = self.compute_ik_franka(xarm_pose)
+        
         return {
             "observation/exterior_image_1_left": 
                 image_tools.resize_with_pad(self.camera_image_gazebo, 224, 224),
             "observation/wrist_image_left": 
                 image_tools.resize_with_pad(self.camera_image_realsense_color, 224, 224),
-            "observation/joint_position": self.joint_positions,
+            "observation/joint_position": franka_joints,  # Send Franka joints
             "observation/gripper_position": [self.gripper_pulse_state],
             "prompt": "Pick up the red marker and put it in the white bowl",
         }
@@ -288,39 +319,107 @@ class CameraJointControlNode:
         if isinstance(action_step, list):
             action_step = np.array(action_step)
         
-        dt = 1 / 15.0  # Time step in seconds, should match control loop rate
-
+        dt = 1 / 15.0  # Time step in seconds
+    
         if self.joint_positions is None:
-            rospy.logerr("Current joint positions not available. Cannot create trajectory.")
+            rospy.logerr("Current joint positions not available")
             return None, None
-
-        current_angles = self.joint_positions
-        scale_factor = 1.0  # Adjust scaling as needed
-
-        # Integrate velocities to compute target angles.
-        target_angles = current_angles + scale_factor * action_step[:7] * dt
         
-        # Check joint limits and clip if necessary
-        # target_angles = self.check_joint_limits(target_angles)
-
-        # Process gripper command (last value of action)
-        # Policy output for gripper is assumed to be normalized in [0, 1].
-        # We map this to the xArm gripper's pulse range [0, 850].
+        # Convert current xArm state to Franka space for velocity integration
+        xarm_pose, _ = self.compute_fk(self.joint_positions, XARM_DH)
+        current_franka = self.compute_ik_franka(xarm_pose)
+        
+        # Integrate velocities in Franka space
+        target_franka = current_franka + action_step[:7] * dt
+        
+        # Convert target Franka joints to xArm joints
+        target_angles = self.franka_to_xarm_joints(target_franka)
+        
+        # Process gripper command
         gripper_val = action_step[7]
-        gripper_command = np.clip(gripper_val, 0.0, 1.0) * 0.85  # 0.85 meters is fully open
-
-        # Create JointTrajectory message
+        gripper_command = np.clip(gripper_val, 0.0, 1.0) * 0.85
+    
+        # Create trajectory message
         traj_msg = JointTrajectory()
         traj_msg.joint_names = self.joint_names
-
-        # Create a trajectory point
+    
         point = JointTrajectoryPoint()
         point.positions = target_angles
-        point.time_from_start = rospy.Duration(dt)  # Move in dt seconds
-
+        point.time_from_start = rospy.Duration(dt)
+    
         traj_msg.points.append(point)
-
+    
         return traj_msg, gripper_command
+
+    def compute_fk(self, joint_angles, dh_params):
+        """
+        Compute forward kinematics using DH parameters
+        """
+        T = np.eye(4)
+        transforms = []
+        
+        for i in range(len(joint_angles)):
+            theta = joint_angles[i] + dh_params['offset'][i]
+            d = dh_params['d'][i]
+            a = dh_params['a'][i]
+            alpha = dh_params['alpha'][i]
+            
+            # DH transformation matrix
+            T_i = np.array([
+                [np.cos(theta), -np.sin(theta)*np.cos(alpha), np.sin(theta)*np.sin(alpha), a*np.cos(theta)],
+                [np.sin(theta), np.cos(theta)*np.cos(alpha), -np.cos(theta)*np.sin(alpha), a*np.sin(theta)],
+                [0, np.sin(alpha), np.cos(alpha), d],
+                [0, 0, 0, 1]
+            ])
+            
+            T = T @ T_i
+            transforms.append(T.copy())
+        
+        return T, transforms
+
+    def compute_ik_xarm(self, target_pose, initial_guess=None):
+        """
+        Compute inverse kinematics for xArm using numerical optimization
+        """
+        if initial_guess is None:
+            initial_guess = np.zeros(7)
+        
+        def objective(q):
+            current_pose, _ = self.compute_fk(q, XARM_DH)
+            pose_error = np.linalg.norm(current_pose[:3, 3] - target_pose[:3, 3])
+            rot_error = np.linalg.norm(current_pose[:3, :3] - target_pose[:3, :3], 'fro')
+            return pose_error + 0.5 * rot_error
+        
+        from scipy.optimize import minimize
+        
+        # Joint limits for xArm
+        bounds = [(-2*np.pi, 2*np.pi) for _ in range(7)]
+        
+        result = minimize(
+            objective,
+            initial_guess,
+            method='L-BFGS-B',
+            bounds=bounds,
+            options={'maxiter': 100}
+        )
+        
+        return result.x if result.success else None
+
+    def franka_to_xarm_joints(self, franka_joints):
+        """
+        Convert Franka joint angles to xArm joint angles using FK/IK
+        """
+        # Get Franka end-effector pose
+        franka_pose, _ = self.compute_fk(franka_joints, FRANKA_DH)
+        
+        # Compute xArm IK to match the pose
+        xarm_joints = self.compute_ik_xarm(franka_pose, initial_guess=self.joint_positions)
+        
+        if xarm_joints is None:
+            rospy.logwarn("IK failed to converge")
+            return self.joint_positions
+        
+        return xarm_joints
 
 if __name__ == '__main__':
     try:
