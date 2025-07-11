@@ -129,8 +129,7 @@ class CameraJointControlNode:
         self.execution_thread.daemon = True
         
         if self.action_server_connected and self.policy_client is not None:
-            self.inference_thread.start()
-            self.execution_thread.start()
+            self.main_control_loop()  # Instead of starting threads
 
     # --- Camera Callbacks ---
     def camera_image_callback_gazebo(self, msg):
@@ -257,6 +256,30 @@ class CameraJointControlNode:
             "prompt": "Pick up the red marker and put it in the white bowl",
         }
 
+    def get_observation_with_previous(self, previous_franka_joints):
+        """
+        Returns observation using previous Franka joints for better consistency
+        """
+        if self.joint_positions is None:
+            return None
+        
+        if previous_franka_joints is None:
+            # If no previous state, compute from current
+            xarm_pose, _ = self.compute_fk(self.joint_positions, XARM_DH)
+            franka_joints = self.compute_ik_franka(xarm_pose)
+        else:
+            franka_joints = previous_franka_joints
+        
+        return {
+            "observation/exterior_image_1_left": 
+                image_tools.resize_with_pad(self.camera_image_gazebo, 224, 224),
+            "observation/wrist_image_left": 
+                image_tools.resize_with_pad(self.camera_image_realsense_color, 224, 224),
+            "observation/joint_position": franka_joints,
+            "observation/gripper_position": [self.gripper_pulse_state],
+            "prompt": "Pick up the red marker and put it in the white bowl",
+        }
+
     def inference_loop(self):
         rate = rospy.Rate(2)  # 2 Hz - one inference every 0.5 seconds
         
@@ -354,6 +377,7 @@ class CameraJointControlNode:
         """
         Compute forward kinematics using DH parameters
         """
+        print("Computing FK:")
         T = np.eye(4)
         transforms = []
         
@@ -380,6 +404,8 @@ class CameraJointControlNode:
         """
         Compute inverse kinematics for xArm using numerical optimization
         """
+
+        print("Computing IK for xArm:")
         if initial_guess is None:
             initial_guess = np.zeros(7)
         
@@ -401,36 +427,28 @@ class CameraJointControlNode:
             bounds=bounds,
             options={'maxiter': 100}
         )
+
+        print("the result of doing ik on xarm is ",result)
         
         return result.x if result.success else None
 
     def compute_ik_franka(self, target_pose, initial_guess=None):
         """
-        Compute inverse kinematics for Franka using numerical optimization.
-        Similar to xArm IK but uses Franka DH parameters.
-        
-        Args:
-            target_pose (np.ndarray): 4x4 homogeneous transformation matrix of target pose
-            initial_guess (np.ndarray, optional): Initial guess for joint angles. Defaults to None.
-        
-        Returns:
-            np.ndarray: 7 joint angles if successful, None if optimization fails
+        Compute inverse kinematics for Franka directly using the target pose
+        in the robot's local coordinate frame
         """
+        if not isinstance(target_pose, np.ndarray):
+            target_pose = np.array(target_pose)
+        
         if initial_guess is None:
             initial_guess = np.zeros(7)
         
         def objective(q):
             current_pose, _ = self.compute_fk(q, FRANKA_DH)
-            # Position error
             pose_error = np.linalg.norm(current_pose[:3, 3] - target_pose[:3, 3])
-            # Rotation error using Frobenius norm
             rot_error = np.linalg.norm(current_pose[:3, :3] - target_pose[:3, :3], 'fro')
             return pose_error + 0.5 * rot_error
         
-        from scipy.optimize import minimize
-        
-        # Joint limits for Franka
-        # Using Franka's actual joint limits instead of the general -2π to 2π
         bounds = [
             (-2.8973, 2.8973),  # Joint 1
             (-1.7628, 1.7628),  # Joint 2
@@ -441,31 +459,181 @@ class CameraJointControlNode:
             (-2.8973, 2.8973)   # Joint 7
         ]
         
+        from scipy.optimize import minimize
         result = minimize(
             objective,
             initial_guess,
             method='L-BFGS-B',
             bounds=bounds,
-            options={'maxiter': 100}
+            options={'maxiter': 200, 'ftol': 1e-6}
         )
         
-        return result.x if result.success else None
+        if not result.success:
+            rospy.logwarn("Franka IK failed to converge!")
+            return None
+            
+        return result.x
 
-    def franka_to_xarm_joints(self, franka_joints):
+    def franka_to_xarm_joints(self, franka_joints, initial_guess=None):
         """
         Convert Franka joint angles to xArm joint angles using FK/IK
+        Args:
+            franka_joints: array of Franka joint angles
+            initial_guess: array of initial xArm joint angles for IK optimization
         """
+        print("Converting Franka joints to xArm joints:")
+        if franka_joints is None:
+            rospy.logerr("Franka joint angles are None")
+            return None
+            
         # Get Franka end-effector pose
         franka_pose, _ = self.compute_fk(franka_joints, FRANKA_DH)
         
+        # Use provided initial guess or fallback to current position
+        if initial_guess is None:
+            initial_guess = self.joint_positions
+            
         # Compute xArm IK to match the pose
-        xarm_joints = self.compute_ik_xarm(franka_pose, initial_guess=self.joint_positions)
+        xarm_joints = self.compute_ik_xarm(franka_pose, initial_guess=initial_guess)
         
         if xarm_joints is None:
             rospy.logwarn("IK failed to converge")
-            return self.joint_positions
+            return None
         
         return xarm_joints
+
+    def move_to_position(self, target_joints):
+        """
+        Moves the robot arm to a specific joint configuration
+        Args:
+            target_joints: array of 7 joint angles for the arm
+        """
+        # Create trajectory message
+        traj_msg = JointTrajectory()
+        traj_msg.joint_names = self.joint_names  # Uses arm joint names
+
+        # Create trajectory point
+        point = JointTrajectoryPoint()
+        point.positions = target_joints
+        point.time_from_start = rospy.Duration(2.0)  # 2 second movement
+
+        traj_msg.points.append(point)
+        
+        # Send to arm trajectory controller
+        self.send_trajectory(traj_msg)
+        rospy.sleep(2)  # Wait for movement to complete
+
+    def main_control_loop(self):
+        """
+        Main control loop that handles inference and execution sequentially
+        """
+        rate = rospy.Rate(15)  # 15 Hz
+        
+        # Store previous states
+        previous_franka_joints = None
+        previous_xarm_joints = None
+        
+        # First move to default position and get initial Franka pose
+        if self.action_server_connected:
+            self.move_to_default_position()
+            
+            # Get initial Franka state from default xArm position
+            xarm_pose, _ = self.compute_fk(self.joint_positions, XARM_DH)
+            previous_franka_joints = self.compute_ik_franka(xarm_pose)
+            previous_xarm_joints = self.joint_positions.copy()
+            rospy.loginfo("Initial poses computed")
+        
+        while not rospy.is_shutdown():
+            # Check if all required data is available
+            if (self.camera_image_gazebo is None or 
+                self.camera_image_realsense_color is None or 
+                self.joint_positions is None):
+                rospy.logwarn_throttle(1, "Waiting for sensor data...")
+                rate.sleep()
+                continue
+                
+            try:
+                # 1. Get observation using previous Franka joints as reference
+                observation = self.get_observation_with_previous(previous_franka_joints)
+                
+                # 2. Get policy actions
+                start_time = time.time()
+                actions = self.policy_client.infer(observation)["actions"]
+                end_time = time.time()
+                rospy.loginfo(f"Inference time: {end_time - start_time:.3f}s")
+                
+                # 3. Execute each action in the sequence
+                for action_step in actions:
+                    # Convert action to trajectory using previous states
+                    trajectory, gripper_command = self.convert_action_with_previous(
+                        action_step, 
+                        previous_franka_joints,
+                        previous_xarm_joints
+                    )
+                    
+                    if trajectory is not None:
+                        # Execute trajectory
+                        self.send_trajectory(trajectory)
+                        self.send_xarm_gripper_command(gripper_command)
+                        
+                        # Update previous states
+                        xarm_pose, _ = self.compute_fk(trajectory.points[0].positions, XARM_DH)
+                        previous_franka_joints = self.compute_ik_franka(
+                            xarm_pose, 
+                            initial_guess=previous_franka_joints
+                        )
+                        previous_xarm_joints = trajectory.points[0].positions
+                        
+                    rate.sleep()
+                    
+            except Exception as e:
+                rospy.logerr(f"Control loop error: {e}")
+                # On error, try to recover using last known good state
+                if previous_xarm_joints is not None:
+                    rospy.logwarn("Attempting recovery using last known position")
+                    self.move_to_position(previous_xarm_joints)
+                rate.sleep()
+                continue
+            
+            rate.sleep()
+
+    def convert_action_with_previous(self, action_step, prev_franka, prev_xarm):
+        """
+        Convert action to trajectory using previous states for better initialization
+        """
+        if isinstance(action_step, list):
+            action_step = np.array(action_step)
+        
+        dt = 1 / 15.0  # Time step in seconds
+
+        if prev_franka is None or prev_xarm is None:
+            rospy.logerr("Previous joint states not available")
+            return None, None
+        
+        # Integrate velocities in Franka space
+        target_franka = prev_franka + action_step[:7] * dt
+        
+        # Convert target Franka joints to xArm joints using previous xArm state
+        target_angles = self.franka_to_xarm_joints(
+            target_franka, 
+            initial_guess=prev_xarm
+        )
+        
+        # Process gripper command
+        gripper_val = action_step[7]
+        gripper_command = np.clip(gripper_val, 0.0, 1.0) * 0.85
+
+        # Create trajectory message
+        traj_msg = JointTrajectory()
+        traj_msg.joint_names = self.joint_names
+
+        point = JointTrajectoryPoint()
+        point.positions = target_angles
+        point.time_from_start = rospy.Duration(dt)
+
+        traj_msg.points.append(point)
+
+        return traj_msg, gripper_command
 
 if __name__ == '__main__':
     try:
