@@ -119,14 +119,14 @@ class CameraJointControlNode:
             rospy.logerr(f"Could not connect to policy server: {e}")
 
         # Add queue for communication between threads
-        self.action_queue = queue.Queue(maxsize=1)
+        # self.action_queue = queue.Queue(maxsize=1)
         
         # Start inference and execution threads
-        self.inference_thread = threading.Thread(target=self.inference_loop)
-        self.execution_thread = threading.Thread(target=self.execution_loop)
+        # self.inference_thread = threading.Thread(target=self.inference_loop)
+        # self.execution_thread = threading.Thread(target=self.execution_loop)
         
-        self.inference_thread.daemon = True
-        self.execution_thread.daemon = True
+        # self.inference_thread.daemon = True
+        # self.execution_thread.daemon = True
         
         if self.action_server_connected and self.policy_client is not None:
             self.main_control_loop()  # Instead of starting threads
@@ -232,29 +232,29 @@ class CameraJointControlNode:
         rospy.loginfo(f"Sending gripper command: position={target_position}")
         self.gripper_action_client.send_goal(goal)
 
-    def get_observation(self):
-        """
-        Returns observation with xArm images but Franka joint angles
-        """
-        if self.joint_positions is None:
-            return None
+    # def get_observation(self):
+    #     """
+    #     Returns observation with xArm images but Franka joint angles
+    #     """
+    #     if self.joint_positions is None:
+    #         return None
         
-        # Convert xArm joints to Franka end-effector pose
-        xarm_pose, _ = self.compute_fk(self.joint_positions, XARM_DH)
+    #     # Convert xArm joints to Franka end-effector pose
+    #     xarm_pose, _ = self.compute_fk(self.joint_positions, XARM_DH)
         
-        # Use IK to get corresponding Franka joints
-        # This could be replaced with a more efficient mapping if needed
-        franka_joints = self.compute_ik_franka(xarm_pose)
+    #     # Use IK to get corresponding Franka joints
+    #     # This could be replaced with a more efficient mapping if needed
+    #     franka_joints = self.compute_ik_franka(xarm_pose)
         
-        return {
-            "observation/exterior_image_1_left": 
-                image_tools.resize_with_pad(self.camera_image_gazebo, 224, 224),
-            "observation/wrist_image_left": 
-                image_tools.resize_with_pad(self.camera_image_realsense_color, 224, 224),
-            "observation/joint_position": franka_joints,  # Send Franka joints
-            "observation/gripper_position": [self.gripper_pulse_state],
-            "prompt": "Pick up the red marker and put it in the white bowl",
-        }
+    #     return {
+    #         "observation/exterior_image_1_left": 
+    #             image_tools.resize_with_pad(self.camera_image_gazebo, 224, 224),
+    #         "observation/wrist_image_left": 
+    #             image_tools.resize_with_pad(self.camera_image_realsense_color, 224, 224),
+    #         "observation/joint_position": franka_joints,  # Send Franka joints
+    #         "observation/gripper_position": [self.gripper_pulse_state],
+    #         "prompt": "Pick up the red marker and put it in the white bowl",
+    #     }
 
     def get_observation_with_previous(self, previous_franka_joints):
         """
@@ -280,62 +280,62 @@ class CameraJointControlNode:
             "prompt": "Pick up the red marker and put it in the white bowl",
         }
 
-    def inference_loop(self):
-        rate = rospy.Rate(2)  # 2 Hz - one inference every 0.5 seconds
+    # def inference_loop(self):
+    #     rate = rospy.Rate(2)  # 2 Hz - one inference every 0.5 seconds
         
-        while not rospy.is_shutdown():
-            # Wait for sensor data - check if data exists and is valid
-            if (self.camera_image_gazebo is None or 
-                self.camera_image_realsense_color is None or 
-                self.joint_positions is None):
-                rate.sleep()
-                continue
+    #     while not rospy.is_shutdown():
+    #         # Wait for sensor data - check if data exists and is valid
+    #         if (self.camera_image_gazebo is None or 
+    #             self.camera_image_realsense_color is None or 
+    #             self.joint_positions is None):
+    #             rate.sleep()
+    #             continue
             
-            # Get inference
-            try:
-                start_time = time.time()
-                observation = self.get_observation()
-                actions = self.policy_client.infer(observation)["actions"]
-                end_time = time.time()
+    #         # Get inference
+    #         try:
+    #             start_time = time.time()
+    #             observation = self.get_observation()
+    #             actions = self.policy_client.infer(observation)["actions"]
+    #             end_time = time.time()
                 
-                rospy.loginfo(f"Inference time: {end_time - start_time:.3f}s")
+    #             rospy.loginfo(f"Inference time: {end_time - start_time:.3f}s")
                 
-                # Put new actions in queue, replace old ones if necessary
-                if self.action_queue.full():
-                    _ = self.action_queue.get_nowait()  # Remove old actions
-                self.action_queue.put_nowait(actions)
+    #             # Put new actions in queue, replace old ones if necessary
+    #             if self.action_queue.full():
+    #                 _ = self.action_queue.get_nowait()  # Remove old actions
+    #             self.action_queue.put_nowait(actions)
                 
-            except Exception as e:
-                rospy.logerr(f"Inference failed: {e}")
+    #         except Exception as e:
+    #             rospy.logerr(f"Inference failed: {e}")
     
-        rate.sleep()
+    #     rate.sleep()
 
-    def execution_loop(self):
-        rate = rospy.Rate(15)  # 15 Hz
-        current_actions = None
-        action_index = 0
+    # def execution_loop(self):
+    #     rate = rospy.Rate(15)  # 15 Hz
+    #     current_actions = None
+    #     action_index = 0
         
-        while not rospy.is_shutdown():
-            # Get new actions if needed
-            if current_actions is None or action_index >= self.open_loop_horizon:
-                try:
-                    current_actions = self.action_queue.get_nowait()
-                    action_index = 0
-                except queue.Empty:
-                    rospy.logwarn_throttle(1, "Waiting for actions...")
-                    rate.sleep()
-                    continue
+    #     while not rospy.is_shutdown():
+    #         # Get new actions if needed
+    #         if current_actions is None or action_index >= self.open_loop_horizon:
+    #             try:
+    #                 current_actions = self.action_queue.get_nowait()
+    #                 action_index = 0
+    #             except queue.Empty:
+    #                 rospy.logwarn_throttle(1, "Waiting for actions...")
+    #                 rate.sleep()
+    #                 continue
             
-            # Execute current action
-            action_step = current_actions[action_index]
-            trajectory, gripper_command = self.convert_action_to_trajectory_and_gripper(action_step)
+    #         # Execute current action
+    #         action_step = current_actions[action_index]
+    #         trajectory, gripper_command = self.convert_action_to_trajectory_and_gripper(action_step)
             
-            if trajectory is not None:
-                self.send_trajectory(trajectory)
-                self.send_xarm_gripper_command(gripper_command)
+    #         if trajectory is not None:
+    #             self.send_trajectory(trajectory)
+    #             self.send_xarm_gripper_command(gripper_command)
             
-            action_index += 1
-            rate.sleep()
+    #         action_index += 1
+    #         rate.sleep()
 
     def convert_action_to_trajectory_and_gripper(self, action_step):
         if isinstance(action_step, list):
