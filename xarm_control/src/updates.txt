@@ -1,0 +1,18 @@
+Change Log for camera_joint_control_node.py
+
+### 2025-07-17 (Session 5)
+- **REFACTOR**: Replaced the entire custom kinematics engine (FK and IK) with the `ikpy` library. This provides a faster, more accurate, and more robust solution by using optimized, compiled code for kinematic calculations. The node now loads the robot models from their URDF files.
+
+### 2025-07-17 (Session 4)
+- **FIX**: Corrected a critical bug where the gripper's state was never updated. The system now updates its internal gripper state after sending a command, ensuring the policy receives accurate feedback and can perform manipulation tasks correctly.
+
+### 2025-07-17 (Session 3)
+- **REFACTOR**: Reworked the robot's initialization logic for a more stable start. The system now begins with a canonical 'default' Franka joint configuration. The xArm is then commanded to move to match the Franka's end-effector pose, ensuring the virtual and real robots are perfectly synchronized from the first cycle.
+
+### 2025-07-17 (Session 2)
+- **UPDATE**: Improved IK failure handling. Instead of skipping the control cycle (which freezes the robot), the system now logs a warning and proceeds using the last known-good Franka joint state. This allows the robot to continue operating through transient IK failures.
+
+### 2025-07-17
+- **FIX**: Made trajectory execution blocking in `send_trajectory` by uncommenting `wait_for_result()` and adding a timeout to prevent hangs. This ensures one command finishes before the next starts.
+- **FIX**: Modified the main control loop to update the robot's state using actual measured joint positions from the `/xarm/joint_states` topic, correcting potential state drift.
+- **FIX**: Added checks to handle Inverse Kinematics (IK) failures gracefully. The node will now log a warning and reuse the last known state instead of potentially crashing the policy server with invalid data.
