@@ -19,6 +19,11 @@ class FrankaXArmImitationNode:
         rospy.init_node('franka_xarm_imitation_node', anonymous=True)
         rospy.loginfo("Franka to xArm Imitation Node Started")
 
+        # Get namespaces from parameters
+        self.franka_ns = rospy.get_param("~franka_namespace", "franka")
+        self.xarm_ns = rospy.get_param("~xarm_namespace", "xarm")
+        rospy.loginfo(f"Franka Namespace: {self.franka_ns}, xArm Namespace: {self.xarm_ns}")
+
         self.joint_names = ["joint1", "joint2", "joint3", "joint4", "joint5", "joint6", "joint7"]
 
         # --- Kinematics Setup (ikpy) ---
@@ -40,7 +45,7 @@ class FrankaXArmImitationNode:
 
         # --- Action Client Setup ---
         self.action_client = SimpleActionClient(
-            '/xarm/xarm7_traj_controller/follow_joint_trajectory', FollowJointTrajectoryAction)
+            f'/{self.xarm_ns}/xarm7_traj_controller/follow_joint_trajectory', FollowJointTrajectoryAction)
         rospy.loginfo("Waiting for xArm action server...")
         if not self.action_client.wait_for_server(rospy.Duration(10.0)):
             rospy.logerr("Failed to connect to xArm action server. Exiting.")
@@ -51,9 +56,9 @@ class FrankaXArmImitationNode:
         # Initialize MoveIt! components once
         rospy.loginfo("Initializing MoveIt!...")
         moveit_commander.roscpp_initialize(sys.argv)
-        self.robot = moveit_commander.RobotCommander()
-        self.scene = moveit_commander.PlanningSceneInterface()
-        self.group = moveit_commander.MoveGroupCommander("panda_arm") # Assuming "panda_arm" is the planning group
+        self.robot = moveit_commander.RobotCommander(robot_description=f"/{self.franka_ns}/robot_description")
+        self.scene = moveit_commander.PlanningSceneInterface(robot_description=f"/{self.franka_ns}/robot_description")
+        self.group = moveit_commander.MoveGroupCommander("panda_arm", robot_description=f"/{self.franka_ns}/robot_description") # Assuming "panda_arm" is the planning group
 
         self.run_imitation()
 

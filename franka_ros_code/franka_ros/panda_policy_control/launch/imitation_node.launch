@@ -1,8 +1,22 @@
 <launch>
+  <arg name="franka_ns" default="franka" />
+  <arg name="xarm_ns" default="xarm" />
+
   <!-- Launch Franka to xArm Imitation Node -->
   <node 
       pkg="panda_policy_control" 
       type="franka_xarm_imitation_node.py" 
       name="franka_xarm_imitation_node" 
-      output="screen" />
+      output="screen">
+    <param name="franka_namespace" value="$(arg franka_ns)" />
+    <param name="xarm_namespace" value="$(arg xarm_ns)" />
+
+    <!-- Remap topics for Franka -->
+    <remap from="/robot_description" to="/$(arg franka_ns)/robot_description" />
+    <remap from="/franka_state_controller/joint_states" to="/$(arg franka_ns)/franka_state_controller/joint_states" />
+
+    <!-- Remap topics for xArm -->
+    <remap from="/xarm/xarm7_traj_controller/follow_joint_trajectory" to="/$(arg xarm_ns)/xarm7_traj_controller/follow_joint_trajectory" />
+
+  </node>
 </launch>
