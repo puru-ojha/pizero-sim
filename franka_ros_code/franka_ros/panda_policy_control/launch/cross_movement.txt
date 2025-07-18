@@ -1,0 +1,35 @@
+# Cross-Robot Movement Imitation: Franka to xArm
+
+## Objective
+
+The primary goal of this task is to enable an xArm 7-DOF robot to mimic the movements of a Franka Emika Panda robot in real-time. The Franka robot will act as the "leader," performing a pre-defined task, such as picking up a pen and placing it into a bowl. The xArm robot will act as the "follower," replicating the leader's end-effector trajectory to perform the same task.
+
+This process is not a direct mapping of joint angles, as the two robots have different kinematic structures. Instead, it relies on a pipeline of Forward Kinematics (FK) and Inverse Kinematics (IK) to translate the motion from one robot to the other.
+
+## Core Pipeline: FK/IK Translation
+
+The translation from Franka's movement to xArm's movement happens in a continuous loop, where each step involves the following calculations:
+
+1.  **Franka Forward Kinematics (FK):**
+    *   At any given moment, we acquire the current joint angles of the Franka robot.
+    *   Using the Franka's URDF (Unified Robot Description Format) model, we apply forward kinematics.
+    *   **Result:** This calculation gives us the precise 3D pose (position and orientation) of the Franka's end-effector in world coordinates.
+
+2.  **xArm Inverse Kinematics (IK):**
+    *   The end-effector pose obtained from the Franka becomes the **target pose** for the xArm's end-effector.
+    *   Using the xArm's URDF model, we apply inverse kinematics.
+    *   **Result:** This calculation determines the specific joint angles the xArm needs to achieve in order to move its end-effector to the target pose.
+
+## The Control Loop
+
+The entire task is executed as an iterative control loop:
+
+1.  **Franka Moves:** The script controlling the Franka robot executes a small step of its trajectory.
+2.  **Get Franka State:** We read the new joint angles from the Franka.
+3.  **Calculate Franka Pose (FK):** We perform FK on the Franka's joint angles to determine its end-effector's world pose.
+4.  **Calculate xArm Joints (IK):** We use the Franka's end-effector pose as the target for the xArm's IK solver. To ensure smooth motion and avoid erratic solutions, the IK calculation is "seeded" with the xArm's last known joint positions.
+5.  **Command xArm:** The newly calculated joint angles are sent as a trajectory command to the xArm's controllers.
+6.  **xArm Moves:** The xArm executes the command, moving its end-effector to match the Franka's.
+7.  **Repeat:** The loop continues, processing the next incremental movement from the Franka, until the entire task is completed.
+
+This cycle of `Franka Move -> FK -> IK -> xArm Move` allows the xArm to fluidly shadow the Franka's actions, effectively translating a task from one robotic platform to another.

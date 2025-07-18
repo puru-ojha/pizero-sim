@@ -1,0 +1,8 @@
+<launch>
+  <!-- Launch Franka to xArm Imitation Node -->
+  <node 
+      pkg="panda_policy_control" 
+      type="franka_xarm_imitation_node.py" 
+      name="franka_xarm_imitation_node" 
+      output="screen" />
+</launch>
