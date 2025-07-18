@@ -37,7 +37,8 @@
     <arg name="gui" value="$(arg gui)"/>
   </include>
 
-  <!-- send robot urdf to param server, joint limit may be overwritten if use moveit planner -->
+  <group ns="$(arg namespace)">
+    <!-- send robot urdf to param server, joint limit may be overwritten if use moveit planner -->
   <param name="robot_description" command="$(find xacro)/xacro
     --inorder '$(find xarm_description)/urdf/xarm_device.urdf.xacro' robot_type:=xarm dof:=7
     add_gripper:=$(arg add_gripper) add_vacuum_gripper:=$(arg add_vacuum_gripper)
@@ -53,7 +54,7 @@
   <!-- spawn robot model in gazebo, located on the table, -gazebo_namespace defaults to be /gazebo -->
   <node name="spawn_gazebo_model" pkg="gazebo_ros" type="spawn_model"
     respawn="false" output="screen"
-    args="-gazebo_namespace /gazebo -urdf -model xarm7 -x -0.2 -y -0.6 -z 1.021 -Y 1.571 -param robot_description $(arg initial_joint_positions)"/>
+    args="-gazebo_namespace /gazebo -urdf -model xarm7 -x -0.2 -y -0.6 -z 1.021 -Y 1.571 -param $(arg namespace)/robot_description $(arg initial_joint_positions)"/>
 
 
   <!-- load the corresponding controllers -->
@@ -64,6 +65,8 @@
     <arg name="add_gripper" value="$(arg add_gripper)" />
     <arg name="namespace" value="$(arg namespace)" />
   </include>
+
+  </group>
 
 
     <node name="spawn_bowl" pkg="gazebo_ros" type="spawn_model" output="screen"

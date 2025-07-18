@@ -38,6 +38,10 @@ This cycle of `Franka Move -> FK -> IK -> xArm Move` allows the xArm to fluidly 
 
 To run the imitation node, you need to launch the Franka and xArm Gazebo simulations and their respective controllers in separate terminals before launching the imitation node itself.
 
+**Important Note:** Each `roslaunch` command below will start its own independent Gazebo simulation, each containing both a Franka and an xArm robot, along with the bowl and marker pen. The `franka_xarm_imitation_node.py` script is designed to operate by connecting to the relevant topics within these separate simulation environments. Ensure that the robots, bowl, and marker pen are spawned at the same initial positions in both simulations for consistent behavior.
+
+    source devel/setup.bash
+
 1.  **Launch xArm Gazebo Simulation:**
     ```bash
     roslaunch xarm_gazebo xarm7_new.launch
