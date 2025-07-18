@@ -1,4 +1,12 @@
+### 2025-07-18
+- **REFACTOR**: Simplified the robot initialization sequence. The xArm now moves directly to its hardcoded start position (`XARM_POLICY_START_JOINT_POS`) instead of moving to home first and then interpolating to the start. This removes unnecessary complexity and the risk of generating invalid intermediate joint states.
+- **IMPROVEMENT**: Enhanced the initial Franka IK calculation by seeding it with a `FRANKA_CANONICAL_READY_POSE`. Previously, a zero-vector was used, which could result in unpredictable or visually awkward joint configurations. Using a canonical pose as a seed guides the solver to a more natural and stable solution, ensuring better visual consistency between the xArm and its Franka counterpart from the very start.
+
 Change Log for camera_joint_control_node.py
+
+### 2025-07-17 (Session 6)
+- **REFACTOR**: Enhanced robot initialization by moving the xArm to its home position, then gradually to the policy start position. During this movement, the Franka equivalent joint states are continuously tracked and updated using FK on xArm and IK on Franka, ensuring a robust and accurate initial Franka joint configuration for policy execution.
+- **UPDATE**: Created new URDF files (`panda_nomesh.urdf`, `xarm7_nomesh.urdf`) for Franka and xArm respectively, specifically designed to be compatible with the `ikpy` library. This addresses issues with previous URDFs that were not directly usable with `ikpy` due to their structure or content.
 
 ### 2025-07-17 (Session 5)
 - **REFACTOR**: Replaced the entire custom kinematics engine (FK and IK) with the `ikpy` library. This provides a faster, more accurate, and more robust solution by using optimized, compiled code for kinematic calculations. The node now loads the robot models from their URDF files.

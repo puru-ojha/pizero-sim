@@ -78,22 +78,33 @@ This node will:
 
 ## How It Works: The Kinematic Bridge
 
-Since the policy expects observations from a Franka robot and outputs actions for it, this project uses kinematics to bridge the gap.
+This project enables a control policy designed for a Franka Emika Panda robot to control an xArm 7 robot by bridging the kinematic differences between them. This involves translating observations from the xArm to a Franka-compatible format and converting Franka-based actions back into xArm commands.
 
-1.  **Observation Side (xArm -> Franka)**:
-    *   The control node reads the current joint angles of the xArm.
-    *   It computes the Forward Kinematics (FK) of the xArm to find the 3D pose of its end-effector.
-    *   It then computes the Inverse Kinematics (IK) for the Franka robot to find the joint angles that would result in the same end-effector pose.
-    *   These *emulated* Franka joint angles are sent to the policy server along with the camera images.
+### Workflow in Simple Terms
 
-2.  **Action Side (Franka -> xArm)**:
-    *   The policy server returns an action, which is a set of joint velocities for the Franka robot.
-    *   The control node integrates these velocities over a small time step (`dt`) to get a target set of Franka joint angles.
-    *   It then computes the Forward Kinematics (FK) for this target Franka configuration to get a target end-effector pose.
-    *   Finally, it computes the Inverse Kinematics (IK) for the xArm to find the joint angles needed to achieve that target pose.
-    *   These xArm joint angles are sent as a goal to the robot's trajectory controller.
+1.  **Robot Initialization**:
+    *   The xArm first moves to its home (all zeros) position.
+    *   Then, it slowly moves to a predefined policy start position.
+    *   During this gradual movement, the system continuously calculates the Franka robot's equivalent joint configuration that matches the xArm's current pose. This ensures a highly accurate starting point for the Franka's joint states, which is crucial for the policy.
 
-This continuous translation allows the Franka-specific policy to control the xArm robot in the simulation.
+2.  **Observation Processing (xArm -> Franka)**:
+    *   The control node captures real-time camera images and reads the xArm's current joint states.
+    *   It uses Forward Kinematics (FK) to determine the 3D end-effector pose of the xArm.
+    *   It then uses Inverse Kinematics (IK) to find the Franka robot's joint angles that would achieve this exact same end-effector pose.
+    *   These "emulated" Franka joint angles, along with the camera images, are sent as an "observation" to the remote policy server.
+
+3.  **Action Execution (Franka -> xArm)**:
+    *   The policy server, based on the received observation, computes and returns an "action" (typically a set of joint velocity commands for the Franka).
+    *   The control node integrates these Franka velocities over a small time step to determine a target Franka joint configuration.
+    *   It then uses FK to find the 3D end-effector pose corresponding to this target Franka configuration.
+    *   Finally, it uses IK to calculate the necessary xArm joint angles to reach that target end-effector pose.
+    *   These calculated xArm joint angles are sent as a trajectory goal to the xArm's joint controller, causing the robot to move.
+
+This continuous loop of observation, policy inference, and action execution allows the Franka-specific policy to effectively control the xArm robot in the simulation.
+
+### URDFs for ikpy
+
+To ensure compatibility and accuracy with the `ikpy` library for kinematic calculations, new URDF (Unified Robot Description Format) files have been created for both the Franka (`panda_nomesh.urdf`) and xArm (`xarm7_nomesh.urdf`). These URDFs are specifically designed to work seamlessly with `ikpy`, addressing limitations of previous URDF versions that were not directly suitable for `ikpy`'s requirements.
 
 ## Key Files
 

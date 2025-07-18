@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 import rospy
-from sensor_msgs.msg import Image, JointState, CameraInfo
+from sensor_msgs.msg import Image, JointState
 from trajectory_msgs.msg import JointTrajectory, JointTrajectoryPoint
 from control_msgs.msg import FollowJointTrajectoryAction, FollowJointTrajectoryGoal
 from actionlib import SimpleActionClient
@@ -9,14 +9,17 @@ from cv_bridge import CvBridge
 from openpi_client import image_tools
 from openpi_client.websocket_client_policy import WebsocketClientPolicy
 import time
-import threading
-import queue
 # Import ikpy
 import ikpy.chain
 
 # A canonical default "ready" pose for the Franka robot
+# This is used to seed the initial IK calculation to ensure the robot starts in a predictable,
+# visually appropriate configuration. The values are for the 7 controllable joints.
+FRANKA_CANONICAL_READY_POSE = [0, -0.785, 0, -2.356, 0, 1.57, 0.785]
+
 # Note: ikpy uses a different joint representation (includes non-controllable links), so we find the active links.
-FRANKA_DEFAULT_JOINT_POS = [0, -0.785, 0, -2.356, 0, 1.571, 0.785]
+
+XARM_POLICY_START_JOINT_POS = [-2.5, -0.6, 0.5, 1.2, 0.0, 1.2, 0.0]
 
 class CameraJointControlNode:
     def __init__(self):
@@ -111,7 +114,6 @@ class CameraJointControlNode:
             rospy.loginfo("Waiting for initial joint state...")
             while self.joint_positions is None and not rospy.is_shutdown():
                 rospy.sleep(0.1)
-            self.move_to_default_position()
 
         # --- Websocket Client ---
         self.policy_client = None
@@ -122,7 +124,12 @@ class CameraJointControlNode:
             rospy.logerr(f"Could not connect to policy server: {e}")
 
         if self.action_server_connected and self.policy_client is not None:
-            self.main_control_loop()
+            # Initialize robot pose and get initial Franka equivalent joints
+            initial_franka_joints = self.initialize_robot_pose()
+            if initial_franka_joints is None:
+                rospy.logerr("Failed to initialize robot pose. Exiting.")
+                return
+            self.main_control_loop(initial_franka_joints)
 
     # --- Callbacks ---
     def camera_image_callback_gazebo(self, msg):
@@ -135,52 +142,31 @@ class CameraJointControlNode:
         goal_msg = FollowJointTrajectoryGoal(trajectory=trajectory)
         if self.action_server_connected:
             self.action_client.send_goal(goal_msg)
-            if not self.action_client.wait_for_result(rospy.Duration(2.0)):
+
+            # Dynamically set the timeout based on the trajectory's duration + a buffer
+            if not trajectory.points:
+                rospy.logwarn("send_trajectory called with an empty trajectory.")
+                return False
+            
+            # Get the duration of the last point in the trajectory
+            trajectory_duration = trajectory.points[-1].time_from_start.to_sec()
+            # Add a buffer (e.g., 2 seconds) to allow for execution overhead
+            wait_duration = rospy.Duration(trajectory_duration + 2.0)
+
+            rospy.loginfo(f"Waiting for trajectory to complete. Duration: {trajectory_duration:.2f}s, Timeout: {wait_duration.to_sec():.2f}s")
+
+            if not self.action_client.wait_for_result(wait_duration):
                 rospy.logwarn("Trajectory execution timed out.")
                 return False
+            
             result = self.action_client.get_result()
             if result and result.error_code == result.SUCCESSFUL:
                 return True
+            
             rospy.logwarn(f"Trajectory execution failed with error code: {result.error_code if result else 'N/A'}")
             return False
+            
         rospy.logerr("Action server is down.")
-        return False
-
-    def move_to_default_position(self):
-        rospy.loginfo("Moving to default position by matching canonical Franka pose...")
-        
-        # Create a full joint vector for ikpy for the Franka's default pose
-        initial_franka_ikpy = np.zeros(len(self.franka_chain.links))
-        initial_franka_ikpy[self.franka_active_link_indices] = FRANKA_DEFAULT_JOINT_POS
-        rospy.loginfo(f"FRANKA_DEFAULT_JOINT_POS: {FRANKA_DEFAULT_JOINT_POS}")
-        rospy.loginfo(f"Initial Franka IKPY vector: {initial_franka_ikpy}")
-        
-        # Compute the forward kinematics to get the target pose
-        target_pose = self.franka_chain.forward_kinematics(initial_franka_ikpy)
-        rospy.loginfo(f"Target Pose (from Franka FK):\n{target_pose}")
-
-        initial_xarm_ikpy = np.zeros(len(self.xarm_chain.links))
-        initial_xarm_ikpy[self.xarm_active_link_indices] = self.joint_positions
-        rospy.loginfo(f"Current xArm Joint Positions (seed for IK): {self.joint_positions}")
-        rospy.loginfo(f"Initial xArm IKPY vector (seed): {initial_xarm_ikpy}")
-
-        target_angles_ikpy = self.xarm_chain.inverse_kinematics_frame(target=target_pose, initial_position=initial_xarm_ikpy)
-        
-        if target_angles_ikpy is None:
-            rospy.logerr("Failed to compute IK for default position. IK returned None.")
-            return False
-
-        target_angles = target_angles_ikpy[self.xarm_active_link_indices]
-        rospy.loginfo(f"Raw xArm IKPY output: {target_angles_ikpy}")
-        rospy.loginfo(f"Target xArm Joint Positions (active joints): {target_angles})")
-        
-        traj_msg = JointTrajectory(joint_names=self.joint_names, points=[JointTrajectoryPoint(positions=target_angles, time_from_start=rospy.Duration(5.0))])
-
-        if self.send_trajectory(traj_msg):
-            rospy.sleep(5)
-            rospy.loginfo("Arrived at default position")
-            return True
-        rospy.logerr("Failed to execute trajectory to default position.")
         return False
 
     def get_observation(self, franka_joints):
@@ -192,12 +178,62 @@ class CameraJointControlNode:
             "prompt": "Pick up the red marker and put it in the white bowl",
         }
 
-    def main_control_loop(self):
+    def initialize_robot_pose(self):
+        rospy.loginfo("Initializing robot pose for policy...")
+
+        # Step 1: Move xArm directly to the policy start position
+        rospy.loginfo("Moving xArm to policy start position...")
+        target_xarm_joints = np.array(XARM_POLICY_START_JOINT_POS)
+        traj_msg = JointTrajectory(
+            joint_names=self.joint_names,
+            points=[JointTrajectoryPoint(positions=target_xarm_joints, time_from_start=rospy.Duration(5.0))]
+        )
+
+        if not self.send_trajectory(traj_msg):
+            rospy.logerr("Failed to move xArm to start position. Aborting initialization.")
+            return None
+        
+        rospy.loginfo("Arrived at policy start position.")
+
+        # Ensure joint_positions are updated. Give it a moment to be sure we have the latest state.
+        rospy.sleep(0.5) 
+        if self.joint_positions is None:
+            rospy.logerr("Could not get xArm joint positions after moving to start pose.")
+            return None
+
+        rospy.loginfo(f"xArm is at start position: {self.joint_positions}")
+
+        # Step 2: Calculate the equivalent Franka joint angles at this position
+        rospy.loginfo("Calculating initial Franka joint configuration via IK...")
+
+        # Get the current end-effector pose of the xArm
+        current_xarm_ikpy = np.zeros(len(self.xarm_chain.links))
+        current_xarm_ikpy[self.xarm_active_link_indices] = self.joint_positions
+        xarm_pose = self.xarm_chain.forward_kinematics(current_xarm_ikpy)
+
+        # Use the canonical ready pose as the initial guess for Franka's IK solver.
+        # This guides the solver to a more natural and predictable solution.
+        initial_franka_for_ik = np.zeros(len(self.franka_chain.links))
+        initial_franka_for_ik[self.franka_active_link_indices] = FRANKA_CANONICAL_READY_POSE
+
+        # Calculate the Franka joint angles that achieve the same pose
+        initial_franka_joints = self.franka_chain.inverse_kinematics_frame(
+            target=xarm_pose,
+            initial_position=initial_franka_for_ik
+        )
+
+        if initial_franka_joints is None:
+            rospy.logerr("Failed to compute initial Franka joint configuration via IK.")
+            return None
+
+        rospy.loginfo("Successfully calculated initial Franka joints.")
+        return initial_franka_joints
+
+    def main_control_loop(self, initial_franka_joints):
         rate = rospy.Rate(15)
         
         # Correctly initialize previous_franka_joints for ikpy
-        previous_franka_joints = np.zeros(len(self.franka_chain.links))
-        previous_franka_joints[self.franka_active_link_indices] = FRANKA_DEFAULT_JOINT_POS
+        previous_franka_joints = initial_franka_joints
 
         while not rospy.is_shutdown():
             if self.camera_image_gazebo is None or self.joint_positions is None:
