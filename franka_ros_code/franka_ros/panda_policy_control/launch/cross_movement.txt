@@ -33,3 +33,20 @@ The entire task is executed as an iterative control loop:
 7.  **Repeat:** The loop continues, processing the next incremental movement from the Franka, until the entire task is completed.
 
 This cycle of `Franka Move -> FK -> IK -> xArm Move` allows the xArm to fluidly shadow the Franka's actions, effectively translating a task from one robotic platform to another.
+
+## Launching the Simulation
+
+To run the imitation node, you need to launch the Franka and xArm Gazebo simulations and their respective controllers in separate terminals before launching the imitation node itself.
+
+1.  **Launch xArm Gazebo Simulation:**
+    ```bash
+    roslaunch xarm_gazebo xarm7_new.launch
+    ```
+2.  **Launch Franka Gazebo Simulation:**
+    ```bash
+    roslaunch franka_gazebo panda.launch controller:=position_joint_trajectory_controller
+    ```
+3.  **Launch the Imitation Node:**
+    ```bash
+    roslaunch panda_policy_control imitation_node.launch
+    ```
