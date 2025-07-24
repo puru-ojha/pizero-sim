@@ -34,37 +34,36 @@
        />
   <arg name="interactive_marker" default="$(eval arg('controller') == 'cartesian_impedance_example_controller')" doc="Should the interactive marker node be started?" />
 
-  <group ns="$(arg arm_id)">
-    <include file="$(find gazebo_ros)/launch/empty_world.launch" if="$(arg gazebo)">
-      <arg name="world_name" value="$(arg world)"/>
-      <!-- Always start in paused mode, and only unpause when spawning the model -->
-      <arg name="paused" value="true"/>
-      <arg name="gui" value="$(eval not arg('headless'))"/>
-      <arg name="use_sim_time" value="true"/>
-    </include>
+  <include file="$(find gazebo_ros)/launch/empty_world.launch" if="$(arg gazebo)">
+    <arg name="world_name" value="$(arg world)"/>
+    <!-- Always start in paused mode, and only unpause when spawning the model -->
+    <arg name="paused" value="true"/>
+    <arg name="gui" value="$(eval not arg('headless'))"/>
+    <arg name="use_sim_time" value="true"/>
+  </include>
 
-    <param name="robot_description"
-           command="xacro $(find franka_description)/robots/$(arg robot)/$(arg robot).urdf.xacro
-                    gazebo:=true
-                    hand:=$(arg use_gripper)
-                    arm_id:=$(arg arm_id)
-                    xyz:='$(arg x) $(arg y) $(arg z)'
-                    rpy:='$(arg roll) $(arg pitch) $(arg yaw)'
-                    $(arg xacro_args)">
-    </param>
+  <param name="robot_description"
+         command="xacro $(find franka_description)/robots/$(arg robot)/$(arg robot).urdf.xacro
+                  gazebo:=true
+                  hand:=$(arg use_gripper)
+                  arm_id:=$(arg arm_id)
+                  xyz:='$(arg x) $(arg y) $(arg z)'
+                  rpy:='$(arg roll) $(arg pitch) $(arg yaw)'
+                  $(arg xacro_args)">
+  </param>
 
-    <rosparam file="$(find franka_gazebo)/config/franka_hw_sim.yaml" subst_value="true" />
-    <rosparam file="$(find franka_gazebo)/config/sim_controllers.yaml" subst_value="true" />
+  <rosparam file="$(find franka_gazebo)/config/franka_hw_sim.yaml" subst_value="true" />
+  <rosparam file="$(find franka_gazebo)/config/sim_controllers.yaml" subst_value="true" />
 
-    <param name="m_ee" value="0.76" if="$(arg use_gripper)" />
+  <param name="m_ee" value="0.76" if="$(arg use_gripper)" />
 
-    <arg name="unpause" value="$(eval '' if arg('paused') else '-unpause')" />
-    <node name="$(arg arm_id)_model_spawner"
-          pkg="gazebo_ros"
-          type="spawn_model"
-          args="-param $(arg arm_id)/robot_description -urdf -model $(arg arm_id) $(arg unpause)
-                $(arg initial_joint_positions)
-                "/>
+  <arg name="unpause" value="$(eval '' if arg('paused') else '-unpause')" />
+  <node name="$(arg arm_id)_model_spawner"
+        pkg="gazebo_ros"
+        type="spawn_model"
+        args="-param robot_description -urdf -model $(arg arm_id) $(arg unpause)
+              $(arg initial_joint_positions)
+              "/>
 
   <!-- Spawn required ROS controllers -->
   <node pkg="controller_manager"
@@ -99,7 +98,5 @@
   </node>
 
   <node pkg="rviz" type="rviz" output="screen" name="rviz" args="-f $(arg arm_id)_link0 -d $(find franka_example_controllers)/launch/rviz/franka_description_with_marker.rviz --splash-screen $(find franka_visualization)/splash.png" if="$(arg rviz)"/>
-
-  </group>
 
 </launch>
