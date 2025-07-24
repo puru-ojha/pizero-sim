@@ -1,0 +1,26 @@
+<launch>
+
+    <!-- 
+        Launch the Franka MoveIt! planning environment, but without Gazebo.
+        It's assumed that the simulation is already running in a separate terminal.
+        This launch file connects to the existing ROS master and simulation.
+    -->
+    <include file="$(find panda_moveit_config)/launch/move_group.launch">
+        <arg name="allow_trajectory_execution" value="true"/>
+        <arg name="fake_execution" value="false"/>
+        <arg name="info" value="true"/>
+        <arg name="debug" value="false"/>
+    </include>
+
+    <!-- Launch RViz for visualization -->
+    <include file="$(find panda_moveit_config)/launch/moveit_rviz.launch">
+        <arg name="rviz_config" value="$(find panda_moveit_config)/launch/moveit.rviz"/>
+    </include>
+
+    <!-- 
+        Launch the recording script after a delay to ensure MoveIt is fully loaded.
+        The `required="true"` attribute ensures that if this node dies, the whole launch file will shut down.
+    -->
+    <node name="franka_recorder" pkg="franka_recording" type="record_franka_poses.py" output="screen" required="true" launch-prefix="bash -c 'sleep 10; $0 $@' "/>
+
+</launch>
