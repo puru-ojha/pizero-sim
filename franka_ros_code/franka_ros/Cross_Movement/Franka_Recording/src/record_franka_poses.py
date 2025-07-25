@@ -22,7 +22,7 @@ class FrankaRecorder:
         self.arm_group_name = "panda_arm"
         self.arm_move_group = moveit_commander.MoveGroupCommander(self.arm_group_name)
         self.eef_link = self.arm_move_group.get_end_effector_link()
-        rospy.loginfo(f"Using end-effector link: {self.eef_link}")
+        rospy.loginfo("Using end-effector link: {}".format(self.eef_link))
 
         # Setup move group for the gripper
         self.hand_group_name = "panda_hand"
@@ -84,9 +84,9 @@ class FrankaRecorder:
                 if fk_response.error_code.val == fk_response.error_code.SUCCESS:
                     recorded_poses.append(fk_response.pose_stamped[0].pose)
                 else:
-                    rospy.logerr(f"FK failed with error: {fk_response.error_code.val}")
+                    rospy.logerr("FK failed with error: {}".format(fk_response.error_code.val))
             except rospy.ServiceException as e:
-                rospy.logerr(f"FK service call failed: {e}")
+                rospy.logerr("FK service call failed: {}".format(e))
         
         rospy.loginfo(f"Recorded {len(recorded_poses)} poses for the segment.")
         return recorded_poses

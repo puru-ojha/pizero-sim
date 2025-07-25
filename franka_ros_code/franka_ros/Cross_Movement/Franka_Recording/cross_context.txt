@@ -1,0 +1,99 @@
+# Cross-Robot Movement Imitation: Record and Playback Workflow
+
+This document outlines the "record and playback" workflow for the Franka-to-xArm robot movement imitation task. This approach decouples the leader (Franka) and follower (xArm) robots, using separate, non-concurrent simulation stages.
+
+## Objective
+The primary goal is to enable an xArm 7-DOF robot to mimic a pre-defined movement from a Franka Emika Panda robot. This is achieved by recording the Franka's end-effector trajectory and then replaying it on the xArm using a Forward Kinematics (FK) to Inverse Kinematics (IK) pipeline.
+
+## New Workflow: Record and Playback
+
+This workflow is divided into two distinct phases:
+
+### Phase 1: Trajectory Recording (Franka)
+In this phase, we only need the Franka robot simulation.
+1.  **Launch Franka Environment:** A launch file starts the Franka Gazebo simulation and its MoveIt! planning environment.
+2.  **Plan and Record:** A dedicated Python script (`record_franka_poses.py`) plans a motion for the Franka's end-effector to a target pose.
+3.  **Forward Kinematics (FK):** For each point in the planned joint trajectory, the script uses FK to calculate the corresponding 3D pose (position and orientation) of the end-effector.
+4.  **Save Path:** The resulting sequence of end-effector poses is serialized and saved to a file (e.g., `franka_poses.json`).
+
+### Phase 2: Trajectory Playback (xArm)
+In this phase, we only need the xArm robot simulation.
+1.  **Launch xArm Environment:** A separate launch file starts the xArm Gazebo simulation and its MoveIt! planning environment.
+2.  **Load Path:** A playback script (`playback_xarm_from_poses.py`) loads the `franka_poses.json` file.
+3.  **Inverse Kinematics (IK):** The script uses MoveIt's `compute_cartesian_path` function. This function takes the loaded sequence of poses as waypoints and performs the necessary IK calculations to generate a valid joint trajectory for the xArm.
+4.  **Execute Trajectory:** The script commands the xArm's controllers to execute the generated trajectory, causing it to mimic the Franka's original movement.
+
+## Gazebo Simulation Setup
+Details the specific Gazebo environments for each phase.
+
+### Phase 1: Franka (Leader) Environment
+- **Launch File:** `franka_gazebo/launch/panda.launch`
+- **Purpose:** Spawns the Franka Panda robot and the required objects (bowl, marker) into a Gazebo world.
+- **Robot Base Position:** `x=-0.2, y=-0.8, z=1.021`
+- **Command:** `roslaunch franka_gazebo panda.launch`
+
+### Phase 2: xArm (Follower) Environment
+- **Launch File:** `xarm_gazebo/launch/xarm7_new.launch`
+- **Purpose:** Spawns the xArm7 robot and the same objects into a Gazebo world for the playback phase.
+- **Robot Base Position:** `x=-0.2, y=-0.6, z=1.021`, `yaw=1.571`
+- **Command:** `roslaunch xarm_gazebo xarm7_new.launch`
+
+## Running the Full Pipeline
+
+**Part 1: Record Franka Trajectory**
+
+1.  **Terminal 1: Launch Franka Simulation**
+    ```bash
+    roslaunch franka_gazebo panda.launch
+    ```
+2.  **Terminal 2: Run the Recording Script**
+    ```bash
+    roslaunch franka_recording record_moveit.launch
+    ```
+    Wait for the script to finish. It will save `franka_poses.json`. Once done, you can close the Franka simulation (Ctrl+C in Terminal 1).
+
+**Part 2: Playback on xArm**
+
+1.  **Terminal 1: Launch xArm Simulation**
+    ```bash
+    roslaunch xarm_gazebo xarm7_new.launch
+    ```
+2.  **Terminal 2: Run the Playback Script**
+    ```bash
+    roslaunch xarm_following playback_moveit.launch
+    ```
+    The xArm will now execute the trajectory.
+
+## Current Problem and Strategy
+
+**Update:** The URDF configuration issue described below has been resolved. The `panda_moveit.urdf.xacro` and `franka_robot_no_camera.xacro` files are now correctly integrated, ensuring MoveIt loads the robot model without camera-related conflicts and with the gripper enabled. Our current focus is on validating and refining the `record_franka_poses.py` script.
+
+### Problem Description
+
+### Problem Description
+The MoveIt configuration for the Franka robot is failing due to a mismatch between the loaded URDF (`panda_generated.urdf`) and the SRDF (`panda.srdf.xacro`). Specifically:
+- The `panda_generated.urdf` uses `base_link` as its root link, while the SRDF expects `panda_link0`.
+- The `panda_generated.urdf` currently does not include the gripper, but the SRDF expects it to be present, leading to errors related to `panda_hand` and `panda_finger_joint` definitions.
+
+### Current Strategy
+To resolve these issues and ensure MoveIt can correctly load the robot model and its semantic description:
+launch`:** Ensure `record_moveit.launch` includes `move_group.launch` and passes `load_robot_description:=true`. This will trigger the loading of the robot description through the now correctly configured `planning_context.launch`.
+
+### URDF Customization for MoveIt
+To address the camera definition issue in MoveIt, we created two custom xacro files:
+-   `franka_ros_code/franka_ros/franka_description/robots/common/franka_robot_no_camera.xacro`: This is a copy of the original `franka_robot.xacro` with all camera definitions removed.
+-   `franka_ros_code/franka_ros/franka_description/robots/panda/panda_moveit.urdf.xacro`: This is a replica of `panda.urdf.xacro` that includes `franka_robot_no_camera.xacro` instead of the original `franka_robot.xacro`. This ensures that the URDF loaded by MoveIt does not contain any camera-related elements that could cause conflicts with the `world` link.
+  **Revert `planning_context.launch`:** Revert `panda_moveit_config/launch/planning_context.launch` to its original state. This ensures that the standard MoveIt configuration for loading the URDF and SRDF via xacro is used.
+3.  **Enable Gripper in SRDF:** Modify the `planning_context.launch` file to explicitly pass `hand:=true` to the `xacro` command that processes `panda.srdf.xacro`. This will ensure the gripper's links and joints are included in the semantic description.
+4.  **Update `record_moveit.
+
+## Key Files for this Workflow
+-   **Gazebo Launch (Franka):** `franka_gazebo/launch/panda.launch`
+-   **Gazebo Launch (xArm):** `xarm_gazebo/launch/xarm7_new.launch`
+-   **Recording Script:** `Cross_Movement/Franka_Recording/src/record_franka_poses.py`
+-   **Recording Launch File:** `Cross_Movement/Franka_Recording/launch/record_moveit.launch`
+-   **Playback Script:** `Cross_Movement/xarm_Following/src/playback_xarm_from_poses.py`
+-   **Playback Launch File:** `Cross_Movement/xarm_Following/launch/playback_moveit.launch`
+-   **Trajectory Data:** `franka_poses.json` (generated in the `Franka_Recording` package)
+
+This decoupled approach simplifies the simulation process and removes the need for real-time communication between two concurrent Gazebo instances.

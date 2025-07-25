@@ -1,0 +1,5 @@
+[INFO] [1753417313.897803114, 7.262000000]: Using planning interface 'Pilz Industrial Motion Planner'
+  File "/home/gunjan/catkin_ws/src/franka_ros_code/franka_ros/Cross_Movement/Franka_Recording/src/record_franka_poses.py", line 89
+    rospy.logerr(f"FK service call failed: {e}")
+                                              ^
+SyntaxError: invalid syntax
