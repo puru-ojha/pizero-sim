@@ -44,7 +44,7 @@ Details the specific Gazebo environments for each phase.
 
 1.  **Terminal 1: Launch Franka Simulation**
     ```bash
-    roslaunch franka_gazebo panda.launch
+    roslaunch franka_gazebo panda.launch controller:=position_joint_trajectory_controller
     ```
 2.  **Terminal 2: Run the Recording Script**
     ```bash
@@ -67,24 +67,40 @@ Details the specific Gazebo environments for each phase.
 ## Current Problem and Strategy
 
 ### Solved Problems
--   **URDF Configuration:** The mismatch between the loaded URDF and SRDF for the Franka robot has been resolved. We now use `panda_moveit.urdf.xacro` (which includes `franka_robot_no_camera.xacro`) to ensure MoveIt loads the robot model without camera-related conflicts and with the gripper enabled. This involved modifying `panda_moveit_config/launch/planning_context.launch` to correctly reference these custom xacro files and pass `hand:=true`.
+-   **URDF Configuration (Franka):** The mismatch between the loaded URDF and SRDF for the Franka robot was resolved. We now use `panda_moveit.urdf.xacro` (which includes `franka_robot_no_camera.xacro`) to ensure MoveIt loads the robot model without camera-related conflicts and with the gripper enabled. This involved modifying `panda_moveit_config/launch/planning_context.launch` to correctly reference these custom xacro files and pass `hand:=true`.
+-   **`record_franka_poses.py` Script Debugging (Phase 1 Completion):**
+    -   **Syntax Errors (f-strings):** Resolved `SyntaxError` by replacing f-strings with `.format()` calls in `record_franka_poses.py` to ensure compatibility with the ROS Python environment.
+    -   **`ImportError: No module named yaml`:** Addressed by ensuring `pyyaml` was correctly installed and accessible to the ROS Python 3 interpreter.
+    -   **`AttributeError: 'dict' object has no attribute 'x'`:** Fixed by correctly instantiating `geometry_msgs.msg.Point` and `geometry_msgs.msg.Quaternion` objects when defining `Pose` messages in `record_franka_poses.py`.
+    -   **"Action client not connected" / "Unable to identify any set of controllers":** Resolved by configuring `panda_moveit_config/config/simple_moveit_controllers.yaml` to explicitly use `position_joint_trajectory_controller` as the default for the `panda_arm` group, aligning MoveIt's expectations with the working controller.
+    -   **Phase 1 Success:** The `record_franka_poses.py` script now successfully plans trajectories, computes forward kinematics, and saves the Franka's end-effector poses to `franka_poses.json`.
+
+-   **xArm MoveIt! Configuration & Controller Issues (Phase 2 Debugging):**
+    -   **"Robot semantic description not found" / "Group 'xarm_gripper' was not found" / "Group 'xarm7' was not found":**
+        -   The `planning_context.launch` in `xarm7_moveit_config` was initially commented out in `move_group.launch`, preventing the SRDF from being loaded. This was re-enabled.
+        -   The `add_gripper` argument was not being propagated from `playback_moveit.launch` to `xarm7_moveit_config/launch/move_group.launch` and then to `planning_context.launch`. This was fixed by explicitly passing `add_gripper="true"` in `playback_moveit.launch` and ensuring `move_group.launch` passes it to `planning_context.launch`.
+        -   Switched from `xarm7_moveit_config` to `xarm7_gripper_moveit_config` in `playback_moveit.launch` as it's specifically designed for the xArm with a gripper.
+        -   Ensured `xarm7_gripper_moveit_config/launch/move_group.launch` passes `load_robot_description="true"` to its `planning_context.launch`.
+    -   **"Unable to connect to move_group action server 'move_group' within allotted time (5s)":**
+        -   Increased `controller_manager_startup_timeout` in `xarm7_gripper_moveit_config/launch/move_group.launch` to 30 seconds to give the `move_group` node more time to initialize its internal components and action servers.
+        -   Increased `moveit_commander_connection_timeout` for the `xarm_player` node in `playback_moveit.launch` to 20 seconds to give the Python script more time to connect to the `move_group` action server.
+    -   **Incorrect Controller Naming/Namespace:**
+        -   The `controllers.yaml` and `controllers_with_gripper.yaml` in `xarm7_gripper_moveit_config/config` had incorrect or empty controller names. These were updated to include the `/xarm` namespace and the correct controller names (e.g., `/xarm/xarm7_traj_controller`, `/xarm/gripper_traj_controller`).
+        -   The `action_ns` and `type` for the gripper controller in `controllers_with_gripper.yaml` were corrected to `follow_joint_trajectory` and `FollowJointTrajectory` respectively, to match the actual controller type.
+    -   **"arg 'gripper_controller' is not defined":**
+        -   The `gripper_controller` argument was not being passed to `xarm7_gripper_moveit_config/launch/move_group.launch`. This was fixed by adding `gripper_controller="true"` to the include statement in `playback_moveit.launch`.
+    -   **"Kinematics solver doesn't support #attempts anymore":**
+        -   Removed `kinematics_solver_attempts` from `xarm7_gripper_moveit_config/config/kinematics.yaml`.
 
 ### Problem Description
-Our current focus is on debugging the `record_franka_poses.py` script. We encountered a `SyntaxError` related to f-strings, indicating a potential Python version incompatibility. We need to ensure the script runs without syntax errors and correctly records the Franka's end-effector poses.
+Phase 2 (Trajectory Playback for xArm) is now ready for re-evaluation. The focus is on verifying the `playback_xarm_from_poses.py` script's functionality, including loading the recorded Franka poses, performing IK for the xArm, and executing the trajectory.
 
 ### Current Strategy
 The current strategy involves:
-1.  Ensuring `record_franka_poses.py` is compatible with the Python environment (e.g., replacing f-strings with `.format()`).
-2.  Thoroughly testing the `record_franka_poses.py` script to confirm it successfully plans trajectories, computes forward kinematics, and saves the pose data to `franka_poses.json` without errors.
-3.  Addressing any further runtime errors or logical issues that arise during the execution of the script.
+1.  Thoroughly testing `playback_xarm_from_poses.py` by launching the xArm Gazebo environment and the playback script.
+2.  Monitoring for any runtime errors or unexpected behavior during trajectory loading, IK calculation, or execution.
+3.  Verifying that the xArm accurately mimics the Franka's recorded movement.
 
-### URDF Customization for MoveIt
-To address the camera definition issue in MoveIt, we created two custom xacro files:
--   `franka_ros_code/franka_ros/franka_description/robots/common/franka_robot_no_camera.xacro`: This is a copy of the original `franka_robot.xacro` with all camera definitions removed.
--   `franka_ros_code/franka_ros/franka_description/robots/panda/panda_moveit.urdf.xacro`: This is a replica of `panda.urdf.xacro` that includes `franka_robot_no_camera.xacro` instead of the original `franka_robot.xacro`. This ensures that the URDF loaded by MoveIt does not contain any camera-related elements that could cause conflicts with the `world` link.
-  **Revert `planning_context.launch`:** Revert `panda_moveit_config/launch/planning_context.launch` to its original state. This ensures that the standard MoveIt configuration for loading the URDF and SRDF via xacro is used.
-3.  **Enable Gripper in SRDF:** Modify the `planning_context.launch` file to explicitly pass `hand:=true` to the `xacro` command that processes `panda.srdf.xacro`. This will ensure the gripper's links and joints are included in the semantic description.
-4.  **Update `record_moveit.
 
 ## Key Files for this Workflow
 -   **Gazebo Launch (Franka):** `franka_gazebo/launch/panda.launch`

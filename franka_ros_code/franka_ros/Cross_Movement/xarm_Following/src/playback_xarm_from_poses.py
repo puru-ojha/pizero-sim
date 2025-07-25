@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 import sys
 import rospy
 import moveit_commander
@@ -19,7 +19,7 @@ class XArmPlayer:
         # Setup move group for the xArm arm
         self.arm_group_name = "xarm7"
         self.arm_move_group = moveit_commander.MoveGroupCommander(self.arm_group_name)
-        self.arm_move_group.set_planning_time(10) # Increase planning time for complex paths
+        self.arm_move_group.set_planning_time(30) # Increase planning time for complex paths
 
         # Setup move group for the xArm gripper
         self.gripper_group_name = "xarm_gripper"
@@ -82,6 +82,7 @@ class XArmPlayer:
         Plans and executes a move to a single target pose.
         """
         self.arm_move_group.set_pose_target(target_pose)
+        self.arm_move_group.set_start_state_to_current_state()
         success = self.arm_move_group.go(wait=True)
         self.arm_move_group.stop()
         self.arm_move_group.clear_pose_targets()
@@ -150,9 +151,12 @@ def main():
         # 1. Move to the starting pose of the trajectory
         start_pose = waypoints[0]
         rospy.loginfo("Moving to the initial trajectory pose...")
-        if not player.move_to_pose(start_pose):
+        player.arm_move_group.set_pose_target(start_pose)
+        if not player.arm_move_group.go(wait=True):
             rospy.logerr("Failed to move to the starting pose. Aborting.")
             return
+        player.arm_move_group.stop()
+        player.arm_move_group.clear_pose_targets()
         rospy.loginfo("Reached starting pose.")
 
         # 2. Execute the main trajectory
@@ -160,7 +164,7 @@ def main():
         rospy.sleep(1)
 
         rospy.loginfo("Executing the full recorded trajectory.")
-        player.execute_cartesian_path(waypoints)
+        player.execute_cartesian_path(waypoints[1:])
         rospy.sleep(1)
 
         # 3. Final gripper actions (simplified)
