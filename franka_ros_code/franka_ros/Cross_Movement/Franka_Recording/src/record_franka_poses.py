@@ -1,9 +1,9 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 import sys
 import rospy
 import moveit_commander
 from moveit_msgs.srv import GetPositionFK, GetPositionFKRequest
-from geometry_msgs.msg import Pose
+from geometry_msgs.msg import Pose, Point, Quaternion
 import json
 import os
 
@@ -88,7 +88,7 @@ class FrankaRecorder:
             except rospy.ServiceException as e:
                 rospy.logerr("FK service call failed: {}".format(e))
         
-        rospy.loginfo(f"Recorded {len(recorded_poses)} poses for the segment.")
+        rospy.loginfo("Recorded {} poses for the segment.".format(len(recorded_poses)))
         return recorded_poses
 
     def execute_move_to_pose(self, target_pose):
@@ -119,9 +119,9 @@ class FrankaRecorder:
         try:
             with open(filepath, 'w') as f:
                 json.dump(pose_list, f, indent=4)
-            rospy.loginfo(f"Successfully saved {len(pose_list)} total poses to {filepath}")
+            rospy.loginfo("Successfully saved {} total poses to {}".format(len(pose_list), filepath))
         except IOError as e:
-            rospy.logerr(f"Failed to write to {filepath}: {e}")
+            rospy.logerr("Failed to write to {}: {}".format(filepath, e))
 
 def main():
     try:
@@ -137,24 +137,38 @@ def main():
         # Orientation for a top-down grasp
         grasp_orientation = {'x': -1.0, 'y': 0.0, 'z': 0.0, 'w': 0.0}
 
-        home_pose = Pose()
-        home_pose.position.x = 0.3
-        home_pose.position.y = 0.0
-        home_pose.position.z = 0.5
-        home_pose.orientation.x = grasp_orientation['x']
-        home_pose.orientation.y = grasp_orientation['y']
-        home_pose.orientation.z = grasp_orientation['z']
-        home_pose.orientation.w = grasp_orientation['w']
+        home_pose = Pose(
+            position=Point(x=0.3, y=0.0, z=0.5),
+            orientation=Quaternion(x=grasp_orientation['x'], y=grasp_orientation['y'], z=grasp_orientation['z'], w=grasp_orientation['w'])
+        )
 
         # --- Marker Pick Sequence ---
-        marker_pre_grasp = Pose(position={'x': 0.4, 'y': -0.2, 'z': 0.25}, orientation=grasp_orientation)
-        marker_grasp = Pose(position={'x': 0.4, 'y': -0.2, 'z': 0.12}, orientation=grasp_orientation) # Z adjusted for grasp
-        marker_post_grasp = Pose(position={'x': 0.4, 'y': -0.2, 'z': 0.25}, orientation=grasp_orientation)
+        marker_pre_grasp = Pose(
+            position=Point(x=0.4, y=-0.2, z=0.25),
+            orientation=Quaternion(x=grasp_orientation['x'], y=grasp_orientation['y'], z=grasp_orientation['z'], w=grasp_orientation['w'])
+        )
+        marker_grasp = Pose(
+            position=Point(x=0.4, y=-0.2, z=0.12),
+            orientation=Quaternion(x=grasp_orientation['x'], y=grasp_orientation['y'], z=grasp_orientation['z'], w=grasp_orientation['w'])
+        ) # Z adjusted for grasp
+        marker_post_grasp = Pose(
+            position=Point(x=0.4, y=-0.2, z=0.25),
+            orientation=Quaternion(x=grasp_orientation['x'], y=grasp_orientation['y'], z=grasp_orientation['z'], w=grasp_orientation['w'])
+        )
 
         # --- Bowl Place Sequence ---
-        bowl_pre_drop = Pose(position={'x': 0.4, 'y': 0.2, 'z': 0.25}, orientation=grasp_orientation)
-        bowl_drop = Pose(position={'x': 0.4, 'y': 0.2, 'z': 0.15}, orientation=grasp_orientation)
-        bowl_post_drop = Pose(position={'x': 0.4, 'y': 0.2, 'z': 0.25}, orientation=grasp_orientation)
+        bowl_pre_drop = Pose(
+            position=Point(x=0.4, y=0.2, z=0.25),
+            orientation=Quaternion(x=grasp_orientation['x'], y=grasp_orientation['y'], z=grasp_orientation['z'], w=grasp_orientation['w'])
+        )
+        bowl_drop = Pose(
+            position=Point(x=0.4, y=0.2, z=0.15),
+            orientation=Quaternion(x=grasp_orientation['x'], y=grasp_orientation['y'], z=grasp_orientation['z'], w=grasp_orientation['w'])
+        )
+        bowl_post_drop = Pose(
+            position=Point(x=0.4, y=0.2, z=0.25),
+            orientation=Quaternion(x=grasp_orientation['x'], y=grasp_orientation['y'], z=grasp_orientation['z'], w=grasp_orientation['w'])
+        )
 
         # --- 1. Record Full Trajectory without Executing ---
         rospy.loginfo("--- Starting Trajectory Recording Phase ---")
