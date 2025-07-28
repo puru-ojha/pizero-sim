@@ -1,183 +1,216 @@
 #!/usr/bin/env python3
 import sys
 import rospy
-import moveit_commander
-from geometry_msgs.msg import Pose
+import numpy as np
 import json
 import os
-import tf
-from tf.transformations import quaternion_from_euler, quaternion_multiply
+import ikpy.chain
+from sensor_msgs.msg import JointState
+from trajectory_msgs.msg import JointTrajectory, JointTrajectoryPoint
+from control_msgs.msg import FollowJointTrajectoryAction, FollowJointTrajectoryGoal
+from actionlib import SimpleActionClient
+from geometry_msgs.msg import Pose
+import tf.transformations as tf_trans
 
-class XArmPlayer:
+class XArmIKPlayer:
     def __init__(self):
         """
-        Initializes the XArmPlayer node, connecting to MoveIt for the arm and gripper.
+        Initializes the XArmPlayer, using ikpy for kinematics and a direct action client for control.
         """
-        moveit_commander.roscpp_initialize(sys.argv)
-        rospy.init_node('xarm_player', anonymous=True)
+        rospy.init_node('xarm_ik_player', anonymous=True)
 
-        # Setup move group for the xArm arm
-        self.arm_group_name = "xarm7"
-        self.arm_move_group = moveit_commander.MoveGroupCommander(self.arm_group_name)
-        self.arm_move_group.set_planning_time(30) # Increase planning time for complex paths
+        # --- Joint and Controller Setup ---
+        self.joint_names = ["joint1", "joint2", "joint3", "joint4", "joint5", "joint6", "joint7"]
+        self.joint_positions = None
 
-        # Setup move group for the xArm gripper
-        self.gripper_group_name = "xarm_gripper"
-        self.gripper_move_group = moveit_commander.MoveGroupCommander(self.gripper_group_name)
+        # Subscriber to get the current joint states
+        self.joint_state_subscriber = rospy.Subscriber(
+            '/xarm/joint_states', JointState, self.joint_state_callback, queue_size=1)
 
-        rospy.loginfo("xArm Player node initialized.")
+        rospy.loginfo("running the playback from poses")
+        # Action client to send trajectories directly to the controller
+        self.action_client = SimpleActionClient(
+            '/xarm/xarm7_traj_controller/follow_joint_trajectory', FollowJointTrajectoryAction)
+        rospy.loginfo("Waiting for xArm Joint Trajectory Action server...")
+        self.action_server_connected = False
+        # Wait for the action server to come up
+        # This will block until the server is available or timeout occurs
+        if self.action_client.wait_for_server(rospy.Duration(30)):
+            rospy.loginfo("xArm Joint Trajectory Action server connected")
+            self.action_server_connected = True
+        else:
+            rospy.logerr("xArm Joint Trajectory Action server did not come up.")
+        rospy.sleep(2)
 
-    def load_and_transform_poses(self, filepath):
+        # --- Kinematics Setup (ikpy) ---
+        rospy.loginfo("Loading xArm URDF for ikpy...")
+        try:
+            urdf_path = "/home/gunjan/catkin_ws/xarm7_nomesh.urdf"
+            if not os.path.exists(urdf_path):
+                raise IOError(f"URDF file not found at {urdf_path}")
+            self.xarm_chain = ikpy.chain.Chain.from_urdf_file(
+                urdf_path,
+                base_elements=["link_base"],   # Base of your robot
+                active_links_mask=[False, True, True, True, True, True, True, True, False]
+            )
+            rospy.loginfo("ikpy chain for xArm created successfully.")
+        except Exception as e:
+            rospy.logerr(f"Failed to load URDF for ikpy: {e}")
+            sys.exit(1)
+
+        # Wait until we get the first joint state message
+        rospy.loginfo("Waiting for initial joint state...")
+        while self.joint_positions is None and not rospy.is_shutdown():
+            rospy.sleep(0.1)
+        rospy.loginfo("Initial joint state received.")
+
+    def joint_state_callback(self, msg):
         """
-        Loads poses from a JSON file and transforms them from the Franka's coordinate
-        system to the xArm's coordinate system.
+        Callback to update the current joint positions of the robot.
+        """
+        try:
+            # Ensure the order of joints matches self.joint_names
+            positions = [msg.position[msg.name.index(j)] for j in self.joint_names]
+            self.joint_positions = np.array(positions)
+        except ValueError as e:
+            rospy.logwarn_throttle(1.0, f"Could not find all joint names in joint_state message: {e}")
+
+
+    def load_poses_as_matrices(self, filepath):
+        """
+        Loads poses from the JSON file and converts them into a list of 4x4 transformation matrices
+        that ikpy can use. No coordinate system transformation is done here, assuming the
+        poses in the file are already in the xArm's base frame.
         """
         try:
             with open(filepath, 'r') as f:
                 pose_list_raw = json.load(f)
+            rospy.loginfo(f"Loaded {len(pose_list_raw)} raw poses from {filepath}")
         except IOError as e:
             rospy.logerr(f"Failed to read file {filepath}: {e}")
             return []
 
-        transformed_poses = []
-        # Transformation from Franka base to xArm base:
-        # 1. Translate by (0, -0.2, 0)
-        # 2. Rotate by -90 degrees ( -pi/2 radians) around Z-axis
-        q_rotation = quaternion_from_euler(0, 0, -1.570796)
-
+        target_matrices = []
         for p_raw in pose_list_raw:
-            p_franka = p_raw['position']
-            o_franka = p_raw['orientation']
+            pos = p_raw['position']
+            orient = p_raw['orientation']
+            
+            # Apply a fixed rotation to account for different end-effector frame conventions
+            # Franka EEF: X=left, Y=up, Z=forward
+            # xArm EEF: X=forward, Y=left, Z=up
+            # # Rotation: -90 deg around Y, then -90 deg around new X
+            # q1 = tf_trans.quaternion_about_axis(-np.pi/2, [0, 1, 0]) # -90 deg around Y
+            # q2 = tf_trans.quaternion_about_axis(-np.pi/2, [1, 0, 0]) # -90 deg around X
+            # correction_q = tf_trans.quaternion_multiply(q2, q1)
+            
+            # Multiply the recorded orientation by the correction quaternion
+            # Order matters: correction_q * recorded_q (applying correction before original)
+            recorded_q = [orient['x'], orient['y'], orient['z'], orient['w']]
+            # corrected_q = tf_trans.quaternion_multiply(correction_q, recorded_q)
+            corrected_q = recorded_q
 
-            # Apply translation
-            p_translated = {
-                'x': p_franka['x'],
-                'y': p_franka['y'] - 0.2,
-                'z': p_franka['z']
-            }
 
-            # Apply rotation to the position vector
-            p_rotated_x = p_translated['y'] # cos(-90)*x - sin(-90)*y = y
-            p_rotated_y = -p_translated['x'] # sin(-90)*x + cos(-90)*y = -x
+            # Create a 4x4 transformation matrix from position and the corrected quaternion
+            matrix = tf_trans.quaternion_matrix(corrected_q)
+            matrix[0, 3] = pos['x']
+            matrix[1, 3] = pos['y']
+            matrix[2, 3] = pos['z']
+            target_matrices.append(matrix)
+            
+        return target_matrices
 
-            # Apply rotation to the orientation quaternion
-            q_franka = [o_franka['x'], o_franka['y'], o_franka['z'], o_franka['w']]
-            q_rotated = quaternion_multiply(q_rotation, q_franka)
+    def execute_ik_trajectory(self, target_matrices):
+        """
+        Calculates a joint trajectory from a list of Cartesian poses using ikpy and executes it.
+        """
+        if not target_matrices:
+            rospy.logerr("Cannot execute trajectory, list of target matrices is empty.")
+            return
 
-            pose_goal = Pose()
-            pose_goal.position.x = p_rotated_x
-            pose_goal.position.y = p_rotated_y
-            pose_goal.position.z = p_franka['z'] # Z is unaffected
-            pose_goal.orientation.x = q_rotated[0]
-            pose_goal.orientation.y = q_rotated[1]
-            pose_goal.orientation.z = q_rotated[2]
-            pose_goal.orientation.w = q_rotated[3]
-            transformed_poses.append(pose_goal)
+        rospy.loginfo("Starting IK calculation for the trajectory...")
+
+        # Use the current robot position as the seed for the first IK calculation
+        # ikpy expects a full joint array, including non-active links
+        ik_seed = np.zeros(len(self.xarm_chain.links))
+        ik_seed[self.xarm_chain.active_links_mask] = self.joint_positions
         
-        rospy.loginfo(f"Loaded and transformed {len(transformed_poses)} poses.")
-        return transformed_poses
+        joint_trajectory_points = []
+        time_from_start = 0.0
+        dt = 0.1  # Time step between points in seconds
 
-    def move_to_pose(self, target_pose):
-        """
-        Plans and executes a move to a single target pose.
-        """
-        self.arm_move_group.set_pose_target(target_pose)
-        self.arm_move_group.set_start_state_to_current_state()
-        success = self.arm_move_group.go(wait=True)
-        self.arm_move_group.stop()
-        self.arm_move_group.clear_pose_targets()
-        return success
+        for i, target_matrix in enumerate(target_matrices):
+            # Calculate IK for the current target pose, using the previous result as the seed
+            target_joint_angles = self.xarm_chain.inverse_kinematics_frame(
+                target=target_matrix,
+                initial_position=ik_seed
+            )
+            
+            if target_joint_angles is None:
+                rospy.logwarn(f"IK failed for waypoint {i}. Skipping this point.")
+                continue
 
-    def execute_cartesian_path(self, waypoints):
-        """
-        Computes and executes a Cartesian path through the given waypoints.
-        """
-        if not waypoints:
-            rospy.logerr("Waypoint list is empty. Cannot execute path.")
+            # Update the seed for the next iteration
+            ik_seed = target_joint_angles
+
+            # Extract the active joint values for the trajectory message
+            ros_joint_angles = target_joint_angles[self.xarm_chain.active_links_mask]
+
+            # Create the trajectory point
+            time_from_start += dt
+            point = JointTrajectoryPoint(
+                positions=ros_joint_angles.tolist(),
+                time_from_start=rospy.Duration.from_sec(time_from_start)
+            )
+            joint_trajectory_points.append(point)
+
+        rospy.loginfo(f"IK calculation complete. Generated {len(joint_trajectory_points)} trajectory points.")
+
+        if not joint_trajectory_points:
+            rospy.logerr("No valid trajectory points were generated after IK. Aborting.")
             return
 
-        (plan, fraction) = self.arm_move_group.compute_cartesian_path(
-                                   waypoints,   # list of poses
-                                   0.01,        # eef_step
-                                   0.0)         # jump_threshold
+        # --- Send the Trajectory to the Robot ---
+        traj_msg = JointTrajectory(
+            joint_names=self.joint_names,
+            points=joint_trajectory_points
+        )
 
-        rospy.loginfo(f"Cartesian path computed. Fraction of path planned: {fraction:.2f}")
+        goal_msg = FollowJointTrajectoryGoal(trajectory=traj_msg)
+        rospy.loginfo("Sending trajectory to the action server...")
+        self.action_client.send_goal(goal_msg)
 
-        if fraction < 0.9:
-            rospy.logerr("Could not compute the full Cartesian path. Aborting execution.")
-            return
-
-        rospy.loginfo("Executing the planned path.")
-        self.arm_move_group.execute(plan, wait=True)
-
-    def operate_gripper(self, action):
-        """
-        Controls the xArm gripper.
-        Args:
-            action (str): "open" or "close".
-        """
-        joint_goal = self.gripper_move_group.get_current_joint_values()
-        if action == "open":
-            rospy.loginfo("Opening gripper.")
-            joint_goal = [0.85] * len(joint_goal) # 0.85 is fully open for xArm
-        elif action == "close":
-            rospy.loginfo("Closing gripper.")
-            joint_goal = [0.0] * len(joint_goal) # 0 is closed
+        # Wait for the trajectory to finish
+        wait_duration = rospy.Duration(time_from_start + 5.0) # Add a 5s buffer
+        if self.action_client.wait_for_result(wait_duration):
+            rospy.loginfo("Trajectory execution finished successfully.")
         else:
-            rospy.logwarn("Invalid gripper action specified.")
-            return False
-
-        self.gripper_move_group.go(joint_goal, wait=True)
-        self.gripper_move_group.stop()
-        return True
+            rospy.logwarn("Trajectory execution timed out or was preempted.")
 
 def main():
     try:
-        player = XArmPlayer()
+        player = XArmIKPlayer()
 
         # Path to the recorded poses file
         poses_filepath = "/home/gunjan/catkin_ws/src/franka_ros_code/franka_ros/Cross_Movement/Franka_Recording/franka_poses.json"
 
-        # Load and transform the poses
-        waypoints = player.load_and_transform_poses(poses_filepath)
+        # Load poses as a list of 4x4 matrices
+        target_matrices = player.load_poses_as_matrices(poses_filepath)
 
-        if not waypoints:
-            rospy.logerr("Aborting due to empty waypoint list.")
+        if not target_matrices:
+            rospy.logerr("Aborting due to empty pose list.")
             return
 
-        # --- Execute the full sequence ---
-        rospy.loginfo("--- Starting xArm Playback ---")
-        
-        # 1. Move to the starting pose of the trajectory
-        start_pose = waypoints[0]
-        rospy.loginfo("Moving to the initial trajectory pose...")
-        player.arm_move_group.set_pose_target(start_pose)
-        if not player.arm_move_group.go(wait=True):
-            rospy.logerr("Failed to move to the starting pose. Aborting.")
-            return
-        player.arm_move_group.stop()
-        player.arm_move_group.clear_pose_targets()
-        rospy.loginfo("Reached starting pose.")
-
-        # 2. Execute the main trajectory
-        player.operate_gripper("open")
-        rospy.sleep(1)
-
-        rospy.loginfo("Executing the full recorded trajectory.")
-        player.execute_cartesian_path(waypoints[1:])
-        rospy.sleep(1)
-
-        # 3. Final gripper actions (simplified)
-        player.operate_gripper("close")
-        rospy.sleep(1)
-        player.operate_gripper("open")
-
+        # Execute the trajectory using IK
+        rospy.loginfo("--- Starting xArm IK Playback ---")
+        player.execute_ik_trajectory(target_matrices)
         rospy.loginfo("Playback finished.")
 
     except rospy.ROSInterruptException:
         pass
+    except Exception as e:
+        rospy.logerr(f"An unhandled error occurred in main: {e}")
     finally:
-        moveit_commander.roscpp_shutdown()
+        rospy.loginfo("Shutting down xArm IK player.")
 
 if __name__ == '__main__':
     main()

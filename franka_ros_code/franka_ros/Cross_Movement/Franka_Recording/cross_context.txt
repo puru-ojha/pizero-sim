@@ -60,7 +60,7 @@ Details the specific Gazebo environments for each phase.
     ```
 2.  **Terminal 2: Run the Playback Script**
     ```bash
-    roslaunch xarm_following playback_moveit.launch
+    roslaunch xarm_following playback_ik.launch
     ```
     The xArm will now execute the trajectory.
 

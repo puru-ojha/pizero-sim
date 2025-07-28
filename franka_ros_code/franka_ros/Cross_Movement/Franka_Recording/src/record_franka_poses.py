@@ -57,22 +57,36 @@ class FrankaRecorder:
         self.hand_move_group.stop()
         return True
 
-    def record_plan_to_pose(self, target_pose):
+    def record_trajectory_from_waypoints(self, waypoints):
         """
-        Plans a trajectory and uses FK to record the Cartesian path.
+        Computes a Cartesian path through a list of waypoints and records the full trajectory.
         Does NOT execute the plan.
         """
-        self.arm_move_group.set_pose_target(target_pose)
-        plan_success, plan, _, _ = self.arm_move_group.plan()
+        if not waypoints:
+            rospy.logerr("Waypoint list is empty. Cannot record trajectory.")
+            return []
 
-        if not plan_success:
-            rospy.logerr("Trajectory planning failed.")
+        rospy.loginfo("Computing Cartesian path through {} waypoints...".format(len(waypoints)))
+        # Compute the Cartesian path. eef_step is the resolution.
+        # The third argument, jump_threshold, is set to False to disable it, matching the C++ signature.
+        (plan, fraction) = self.arm_move_group.compute_cartesian_path(
+            waypoints, 0.01, False
+        )
+
+        rospy.loginfo("Cartesian path computed. Fraction of path achieved: {:.2f}%".format(fraction * 100))
+
+        if fraction < 0.9: # Allow for some tolerance
+            rospy.logwarn("Could not compute a complete Cartesian path. The recorded trajectory may be incomplete.")
+
+        if not plan.joint_trajectory.points:
+            rospy.logerr("Trajectory planning failed. The plan contains no points.")
             return []
 
         recorded_poses = []
         joint_names = plan.joint_trajectory.joint_names
         header = plan.joint_trajectory.header
 
+        rospy.loginfo("Performing Forward Kinematics for each point in the trajectory...")
         for point in plan.joint_trajectory.points:
             fk_request = GetPositionFKRequest()
             fk_request.header = header
@@ -84,11 +98,11 @@ class FrankaRecorder:
                 if fk_response.error_code.val == fk_response.error_code.SUCCESS:
                     recorded_poses.append(fk_response.pose_stamped[0].pose)
                 else:
-                    rospy.logerr("FK failed with error: {}".format(fk_response.error_code.val))
+                    rospy.logerr("FK failed with error code: {}".format(fk_response.error_code.val))
             except rospy.ServiceException as e:
                 rospy.logerr("FK service call failed: {}".format(e))
         
-        rospy.loginfo("Recorded {} poses for the segment.".format(len(recorded_poses)))
+        rospy.loginfo("Recorded {} total poses for the trajectory.".format(len(recorded_poses)))
         return recorded_poses
 
     def execute_move_to_pose(self, target_pose):
@@ -126,66 +140,61 @@ class FrankaRecorder:
 def main():
     try:
         recorder = FrankaRecorder()
-        full_trajectory = []
 
         # --- Define Poses in Robot's Base Frame ---
-        # Coordinates are derived from Gazebo world poses minus the robot's spawn pose.
-        # Robot base is at x=-0.2, y=-0.8, z=1.021
-        # Marker is at   x=0.2,  y=-1.0, z=1.021 -> Robot frame: (0.4, -0.2, 0.0)
-        # Bowl is at     x=0.2,  y=-0.6, z=1.021 -> Robot frame: (0.4,  0.2, 0.0)
+        # VERTICAL OFFSET to avoid collision due to gripper length mismatch
+        z_offset = 0.15 # 15 cm
 
         # Orientation for a top-down grasp
         grasp_orientation = {'x': -1.0, 'y': 0.0, 'z': 0.0, 'w': 0.0}
 
         home_pose = Pose(
-            position=Point(x=0.3, y=0.0, z=0.5),
+            position=Point(x=0.3, y=0.0, z=0.5 + z_offset),
             orientation=Quaternion(x=grasp_orientation['x'], y=grasp_orientation['y'], z=grasp_orientation['z'], w=grasp_orientation['w'])
         )
 
         # --- Marker Pick Sequence ---
         marker_pre_grasp = Pose(
-            position=Point(x=0.4, y=-0.2, z=0.25),
+            position=Point(x=0.4, y=-0.2, z=0.25 + z_offset),
             orientation=Quaternion(x=grasp_orientation['x'], y=grasp_orientation['y'], z=grasp_orientation['z'], w=grasp_orientation['w'])
         )
         marker_grasp = Pose(
-            position=Point(x=0.4, y=-0.2, z=0.12),
+            position=Point(x=0.4, y=-0.2, z=0.12 + z_offset),
             orientation=Quaternion(x=grasp_orientation['x'], y=grasp_orientation['y'], z=grasp_orientation['z'], w=grasp_orientation['w'])
         ) # Z adjusted for grasp
         marker_post_grasp = Pose(
-            position=Point(x=0.4, y=-0.2, z=0.25),
+            position=Point(x=0.4, y=-0.2, z=0.25 + z_offset),
             orientation=Quaternion(x=grasp_orientation['x'], y=grasp_orientation['y'], z=grasp_orientation['z'], w=grasp_orientation['w'])
         )
 
         # --- Bowl Place Sequence ---
         bowl_pre_drop = Pose(
-            position=Point(x=0.4, y=0.2, z=0.25),
+            position=Point(x=0.4, y=0.2, z=0.25 + z_offset),
             orientation=Quaternion(x=grasp_orientation['x'], y=grasp_orientation['y'], z=grasp_orientation['z'], w=grasp_orientation['w'])
         )
         bowl_drop = Pose(
-            position=Point(x=0.4, y=0.2, z=0.15),
+            position=Point(x=0.4, y=0.2, z=0.15 + z_offset),
             orientation=Quaternion(x=grasp_orientation['x'], y=grasp_orientation['y'], z=grasp_orientation['z'], w=grasp_orientation['w'])
         )
         bowl_post_drop = Pose(
-            position=Point(x=0.4, y=0.2, z=0.25),
+            position=Point(x=0.4, y=0.2, z=0.25 + z_offset),
             orientation=Quaternion(x=grasp_orientation['x'], y=grasp_orientation['y'], z=grasp_orientation['z'], w=grasp_orientation['w'])
         )
 
-        # --- 1. Record Full Trajectory without Executing ---
+        # --- 1. Define Waypoints for the Full Trajectory ---
+        waypoints = []
+        waypoints.append(home_pose)
+        waypoints.append(marker_pre_grasp)
+        waypoints.append(marker_grasp)
+        waypoints.append(marker_post_grasp)
+        waypoints.append(bowl_pre_drop)
+        waypoints.append(bowl_drop)
+        waypoints.append(bowl_post_drop)
+        waypoints.append(home_pose)
+
+        # --- 2. Record Full Trajectory without Executing ---
         rospy.loginfo("--- Starting Trajectory Recording Phase ---")
-        # Move from home to pre-grasp
-        full_trajectory.extend(recorder.record_plan_to_pose(marker_pre_grasp))
-        # Move to grasp
-        full_trajectory.extend(recorder.record_plan_to_pose(marker_grasp))
-        # Lift marker
-        full_trajectory.extend(recorder.record_plan_to_pose(marker_post_grasp))
-        # Move to pre-drop over bowl
-        full_trajectory.extend(recorder.record_plan_to_pose(bowl_pre_drop))
-        # Lower to drop
-        full_trajectory.extend(recorder.record_plan_to_pose(bowl_drop))
-        # Retract from bowl
-        full_trajectory.extend(recorder.record_plan_to_pose(bowl_post_drop))
-        # Return home
-        full_trajectory.extend(recorder.record_plan_to_pose(home_pose))
+        full_trajectory = recorder.record_trajectory_from_waypoints(waypoints)
 
         if not full_trajectory:
             rospy.logerr("Recording failed, no poses were captured. Aborting.")
@@ -193,7 +202,7 @@ def main():
 
         recorder.save_poses_to_file(full_trajectory)
 
-        # --- 2. Execute the Full Pick-and-Place Motion for Confirmation ---
+        # --- 3. Execute the Full Pick-and-Place Motion for Confirmation ---
         rospy.loginfo("--- Starting Motion Execution Phase ---")
         rospy.loginfo("Moving to home pose.")
         recorder.execute_move_to_pose(home_pose)

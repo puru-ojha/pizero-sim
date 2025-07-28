@@ -1,0 +1,14 @@
+<launch>
+    <!-- 
+        This launch file is designed to run the ikpy-based playback script.
+        It assumes that the Gazebo simulation and the robot controllers have already
+        been launched in a separate terminal (e.g., via `roslaunch xarm_gazebo xarm7_new.launch`).
+    -->
+
+    <node name="xarm_ik_player" 
+          pkg="xarm_following" 
+          type="playback_xarm_from_poses.py" 
+          output="screen" 
+          required="true"/>
+
+</launch>
