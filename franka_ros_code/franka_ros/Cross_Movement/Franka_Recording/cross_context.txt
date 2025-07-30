@@ -64,6 +64,49 @@ Details the specific Gazebo environments for each phase.
     ```
     The xArm will now execute the trajectory.
 
+## Kinematic Correction and Findings
+
+During testing, a significant orientation mismatch was observed between the Franka's recorded motion and the xArm's playback. The root cause was traced to fundamental differences in the kinematic definitions (URDFs) of the two robots, even when their bases were perfectly aligned in the Gazebo world.
+
+This was diagnosed and confirmed using `rosrun tf tf_echo` to inspect the live transformations in each robot's simulation.
+
+### 1. Base-to-Wrist Mismatch
+
+The first issue is the inherent rotational difference between each robot's base and its wrist (end-effector flange) when both are at their "home" (zero-joint) position.
+
+-   **xArm (`link_base` -> `link7`):**
+    -   **Quaternion:** `[0.0, 0.0, 1.0, 0.0]`
+    -   **Analysis:** A 180-degree rotation around the Z-axis.
+
+-   **Franka (`panda_link0` -> `panda_link8`):
+    -   **Quaternion:** `[0.990, -0.131, 0.058, -0.010]`
+    -   **Analysis:** A complex, non-aligned orientation.
+
+**Conclusion:** The robots have different "zero-pose" orientations. A direct pose transfer is impossible without a correction.
+
+### 2. Wrist-to-TCP (Tool) Mismatch
+
+The second issue is the difference in the static transform from the wrist to the final Tool Center Point (TCP).
+
+-   **xArm (`link7` -> `link_tcp`):
+    -   **Translation:** `[0.0, 0.0, 0.172]`
+    -   **Rotation:** `[0.0, 0.0, 0.0, 1.0]` (No rotation)
+
+-   **Franka (`panda_link8` -> `panda_hand_tcp`):
+    -   **Translation:** `[0.0, 0.0, 0.103]`
+    -   **Rotation:** `[0.0, 0.0, -0.383, 0.924]` (-45 degree rotation around Z)
+
+**Conclusion:** The tools have different lengths and the Franka gripper has a built-in -45 degree twist.
+
+### Solution: Two-Stage Correction
+
+To resolve this, a two-stage correction was implemented in the `playback_xarm_from_poses.py` script. For every pose loaded from the Franka's trajectory, the script:
+
+1.  **Applies a Base Correction:** It first applies a calculated rotation to compensate for the base-to-wrist orientation difference.
+2.  **Applies a Tool Correction:** It then applies a second transformation to account for the differences in tool length and rotation.
+
+This ensures that the target pose for the xArm's IK solver is correctly mapped from the Franka's coordinate system, resulting in accurate motion playback.
+
 ## Current Problem and Strategy
 
 ### Solved Problems
@@ -93,13 +136,21 @@ Details the specific Gazebo environments for each phase.
         -   Removed `kinematics_solver_attempts` from `xarm7_gripper_moveit_config/config/kinematics.yaml`.
 
 ### Problem Description
-Phase 2 (Trajectory Playback for xArm) is now ready for re-evaluation. The focus is on verifying the `playback_xarm_from_poses.py` script's functionality, including loading the recorded Franka poses, performing IK for the xArm, and executing the trajectory.
+Even after applying the base and tool corrections, the xArm's motion is not perfectly imitating the Franka. The root cause is now believed to be a fundamental mismatch between the URDF model used for Inverse Kinematics and the one used for the Gazebo simulation.
+
+- **IK Model:** The `playback_xarm_from_poses.py` script uses `ikpy` with a simplified, hardcoded URDF (`xarm7_nomesh.urdf`).
+- **Simulation Model:** Gazebo uses a full URDF dynamically generated from `xarm_device.urdf.xacro`, which includes extra hardware like a Realsense camera.
+
+### URDF and IK Solver Mismatch
+Attempts to programmatically verify the kinematics of `xarm7_nomesh.urdf` against the live Gazebo simulation have failed. The `ikpy` library is unable to correctly parse the simplified URDF, indicating that it is likely corrupt, incomplete, or structured in a non-standard way.
+
+This makes the simplified URDF an unreliable foundation for the IK calculations that are essential for the playback. The remaining motion inaccuracies are a direct result of the IK solver working with a flawed "blueprint" of the robot.
 
 ### Current Strategy
-The current strategy involves:
-1.  Thoroughly testing `playback_xarm_from_poses.py` by launching the xArm Gazebo environment and the playback script.
-2.  Monitoring for any runtime errors or unexpected behavior during trajectory loading, IK calculation, or execution.
-3.  Verifying that the xArm accurately mimics the Franka's recorded movement.
+The new strategy is to abandon the problematic `xarm7_nomesh.urdf` file entirely.
+1.  **Generate a Clean URDF:** Create a new, reliable URDF (`xarm7_ik_clean.urdf`) by running the `xacro` tool on the original `xarm_device.urdf.xacro` but with arguments to disable non-essential hardware like the camera and gripper.
+2.  **Verify the Clean URDF:** Use the deep comparison script to prove that this new URDF is kinematically identical to the arm portion of the robot running in Gazebo.
+3.  **Update Playback Script:** Once verified, update `playback_xarm_from_poses.py` to use this new, clean, and reliable URDF for all IK calculations.
 
 
 ## Key Files for this Workflow
@@ -108,7 +159,28 @@ The current strategy involves:
 -   **Recording Script:** `Cross_Movement/Franka_Recording/src/record_franka_poses.py`
 -   **Recording Launch File:** `Cross_Movement/Franka_Recording/launch/record_moveit.launch`
 -   **Playback Script:** `Cross_Movement/xarm_Following/src/playback_xarm_from_poses.py`
--   **Playback Launch File:** `Cross_Movement/xarm_Following/launch/playback_moveit.launch`
+-   **Playback Launch File:** `Cross_Movement/xarm_Following/launch/playback_ik.launch`
 -   **Trajectory Data:** `franka_poses.json` (generated in the `Franka_Recording` package)
 
 This decoupled approach simplifies the simulation process and removes the need for real-time communication between two concurrent Gazebo instances.
+
+
+Iniital Xarm position 
+       default="-J joint1 -0.5
+                -J joint2 -0.6
+                -J joint3 0.5
+                -J joint4 1.2
+                -J joint5 0.0
+                -J joint6 1.2
+                -J joint7 0
+
+Initial Franka Panda Position
+       default="-J $(arg arm_id)_joint1 0
+                -J $(arg arm_id)_joint2 -0.785
+                -J $(arg arm_id)_joint3 0
+                -J $(arg arm_id)_joint4 -2.356
+                -J $(arg arm_id)_joint5 0
+                -J $(arg arm_id)_joint6 1.571
+                -J $(arg arm_id)_joint7 0.785
+                -J $(arg arm_id)_finger_joint1 0.001
+                -J $(arg arm_id)_finger_joint2 0.001"

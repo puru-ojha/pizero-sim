@@ -78,9 +78,7 @@ class XArmIKPlayer:
 
     def load_poses_as_matrices(self, filepath):
         """
-        Loads poses from the JSON file and converts them into a list of 4x4 transformation matrices
-        that ikpy can use. No coordinate system transformation is done here, assuming the
-        poses in the file are already in the xArm's base frame.
+        Loads poses, applies a two-stage correction (base and tool), and returns 4x4 matrices.
         """
         try:
             with open(filepath, 'r') as f:
@@ -90,32 +88,45 @@ class XArmIKPlayer:
             rospy.logerr(f"Failed to read file {filepath}: {e}")
             return []
 
+        # --- Stage 1: Base Orientation Correction (Wrist-to-Wrist) ---
+        xarm_home_quat = np.array([0.0, 0.0, 1.0, 0.0])
+        franka_home_quat = np.array([0.990, -0.131, 0.058, -0.010])
+        xarm_home_rot = tf_trans.quaternion_matrix(xarm_home_quat)[:3, :3]
+        franka_home_rot = tf_trans.quaternion_matrix(franka_home_quat)[:3, :3]
+        base_correction_rot = np.dot(xarm_home_rot, franka_home_rot.T)
+        rospy.loginfo("Applying base rotational correction.")
+
+        # --- Stage 2: Tool-Center-Point (TCP) Correction ---
+        # Transform from Franka wrist to Franka TCP
+        T_franka_wrist_to_tcp = tf_trans.quaternion_matrix([0.0, 0.0, -0.383, 0.924])
+        T_franka_wrist_to_tcp[0:3, 3] = [0.0, 0.0, 0.103]
+
+        # Transform from xArm wrist to xArm TCP
+        T_xarm_wrist_to_tcp = tf_trans.quaternion_matrix([0.0, 0.0, 0.0, 1.0])
+        T_xarm_wrist_to_tcp[0:3, 3] = [0.0, 0.0, 0.172]
+
+        # Correction: P_xarm_wrist = P_franka_wrist * T_franka_tcp * inv(T_xarm_tcp)
+        tool_correction_matrix = np.dot(T_franka_wrist_to_tcp, np.linalg.inv(T_xarm_wrist_to_tcp))
+        rospy.loginfo("Applying tool center point (TCP) correction.")
+
         target_matrices = []
         for p_raw in pose_list_raw:
             pos = p_raw['position']
             orient = p_raw['orientation']
             
-            # Apply a fixed rotation to account for different end-effector frame conventions
-            # Franka EEF: X=left, Y=up, Z=forward
-            # xArm EEF: X=forward, Y=left, Z=up
-            # # Rotation: -90 deg around Y, then -90 deg around new X
-            # q1 = tf_trans.quaternion_about_axis(-np.pi/2, [0, 1, 0]) # -90 deg around Y
-            # q2 = tf_trans.quaternion_about_axis(-np.pi/2, [1, 0, 0]) # -90 deg around X
-            # correction_q = tf_trans.quaternion_multiply(q2, q1)
+            # Create a 4x4 matrix for the loaded Franka wrist pose
+            loaded_pose_matrix = tf_trans.quaternion_matrix([orient['x'], orient['y'], orient['z'], orient['w']])
+            loaded_pose_matrix[0:3, 3] = [pos['x'], pos['y'], pos['z']]
+
+            # Apply base correction to rotation
+            corrected_rot = np.dot(base_correction_rot, loaded_pose_matrix[:3, :3])
+            base_corrected_pose = np.copy(loaded_pose_matrix)
+            base_corrected_pose[:3, :3] = corrected_rot
+
+            # Apply the final tool correction
+            final_target_matrix = np.dot(base_corrected_pose, tool_correction_matrix)
             
-            # Multiply the recorded orientation by the correction quaternion
-            # Order matters: correction_q * recorded_q (applying correction before original)
-            recorded_q = [orient['x'], orient['y'], orient['z'], orient['w']]
-            # corrected_q = tf_trans.quaternion_multiply(correction_q, recorded_q)
-            corrected_q = recorded_q
-
-
-            # Create a 4x4 transformation matrix from position and the corrected quaternion
-            matrix = tf_trans.quaternion_matrix(corrected_q)
-            matrix[0, 3] = pos['x']
-            matrix[1, 3] = pos['y']
-            matrix[2, 3] = pos['z']
-            target_matrices.append(matrix)
+            target_matrices.append(final_target_matrix)
             
         return target_matrices
 

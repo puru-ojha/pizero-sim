@@ -21,9 +21,9 @@ This stage captures the desired motion from the Franka robot.
 This stage reproduces the captured motion on the xArm robot.
 
 *   **Load the Path:** The playback script begins by loading the saved sequence of end-effector poses.
-*   **Plan Cartesian Path:** This sequence of poses is provided as a set of **waypoints** to the xArm's MoveIt! `compute_cartesian_path` function.
-*   **Result:** This function performs the complex **Inverse Kinematics (IK)** calculations. It attempts to find a continuous, valid joint trajectory for the xArm that moves its end-effector through each of the specified waypoints, matching both the position and orientation at each step. The output is a new joint trajectory, but this time for the xArm.
-*   **Execute:** The final step is to send this new joint trajectory to the xArm's controllers for execution.
+*   **Calculate Joint Angles with IK:** The script iterates through the sequence of poses. For each pose, it uses the **`ikpy` library** with the xArm's URDF model to perform an **Inverse Kinematics (IK)** calculation.
+*   **Result:** This calculation determines the specific joint angles the xArm needs to achieve that end-effector pose. The result is a new joint trajectory, created point-by-point, specifically for the xArm.
+*   **Execute:** The final step is to send this new joint trajectory directly to the xArm's `follow_joint_trajectory` action server for execution.
 
 ## Decoupled Workflow
 
@@ -31,10 +31,10 @@ This "Record and Playback" model separates the problem into two simple, independ
 
 1.  **Record Franka's Trajectory:**
     *   This step runs a Franka-only simulation to generate and save the end-effector pose file.
-    *   `roslaunch panda_policy_control record_trajectory.launch`
+    *   `roslaunch franka_recording record_moveit.launch`
 
 2.  **Playback on xArm:**
     *   This step runs an xArm-only simulation, loads the pose file, and executes the motion.
-    *   `roslaunch panda_policy_control playback_trajectory.launch`
+    *   `roslaunch xarm_following playback_ik.launch`
 
 This method ensures a reliable and accurate transfer of motion by focusing on the end-effector's path in 3D space, which is the common language between the two different robots.
