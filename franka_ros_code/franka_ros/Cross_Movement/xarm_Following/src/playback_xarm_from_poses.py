@@ -78,8 +78,9 @@ class XArmIKPlayer:
 
     def load_poses_as_matrices(self, filepath):
         """
-        Loads poses and applies a correction for end-effector differences.
-        Base correction is not needed as robots are assumed to be aligned.
+        Loads poses and converts them directly to transformation matrices.
+        No end-effector correction is applied because the trajectory is already
+        in the TCP frame, and both robot base frames are aligned.
         """
         try:
             with open(filepath, 'r') as f:
@@ -89,27 +90,6 @@ class XArmIKPlayer:
             rospy.logerr(f"Failed to read file {filepath}: {e}")
             return []
 
-        # --- End-Effector Correction (using original data from cross_context.txt) ---
-        # This matrix transforms a desired TCP pose (from the Franka) into the required
-        # pose for the xArm's end-effector link (link_eef).
-        # T_ee_corr = T_xarm_eef_home * inv(T_franka_tcp_home)
-
-        # xArm EEF at home (from tf_echo link_base -> link_tcp)
-        xarm_trans = [0.426, 0.025, 0.476]
-        xarm_quat = [0.957, -0.002, 0.256, 0.139]
-        T_xarm_eef_home = tf_trans.quaternion_matrix(xarm_quat)
-        T_xarm_eef_home[0:3, 3] = xarm_trans
-
-        # Franka TCP at home (from tf_echo panda_link0 -> panda_hand_tcp)
-        franka_trans = [0.307, -0.000, 0.487]
-        franka_quat = [1.000, 0.000, 0.000, 0.000]
-        T_franka_tcp_home = tf_trans.quaternion_matrix(franka_quat)
-        T_franka_tcp_home[0:3, 3] = franka_trans
-
-        # Calculate the end-effector correction matrix
-        ee_correction_matrix = np.dot(T_xarm_eef_home, np.linalg.inv(T_franka_tcp_home))
-        rospy.loginfo("Applying original end-effector correction matrix.")
-
         target_matrices = []
         for p_raw in pose_list_raw:
             pos = p_raw['position']
@@ -118,11 +98,8 @@ class XArmIKPlayer:
             # Create a 4x4 matrix for the loaded Franka TCP pose
             loaded_pose_matrix = tf_trans.quaternion_matrix([orient['x'], orient['y'], orient['z'], orient['w']])
             loaded_pose_matrix[0:3, 3] = [pos['x'], pos['y'], pos['z']]
-
-            # Apply the end-effector correction (no base correction needed)
-            final_target_matrix = np.dot(loaded_pose_matrix, ee_correction_matrix)
             
-            target_matrices.append(final_target_matrix)
+            target_matrices.append(loaded_pose_matrix)
             
         return target_matrices
 

@@ -21,8 +21,11 @@ class FrankaRecorder:
         # Setup move group for the arm
         self.arm_group_name = "panda_arm"
         self.arm_move_group = moveit_commander.MoveGroupCommander(self.arm_group_name)
+        
+        # Explicitly set the end-effector to the TCP link for planning and recording
+        self.arm_move_group.set_end_effector_link("panda_hand_tcp")
         self.eef_link = self.arm_move_group.get_end_effector_link()
-        rospy.loginfo("Using end-effector link: {}".format(self.eef_link))
+        rospy.loginfo("Using end-effector link for planning and recording: {}".format(self.eef_link))
 
         # Setup move group for the gripper
         self.hand_group_name = "panda_hand"
@@ -167,7 +170,7 @@ def main():
             orientation=Quaternion(x=grasp_orientation['x'], y=grasp_orientation['y'], z=grasp_orientation['z'], w=grasp_orientation['w'])
         )
         marker_grasp = Pose(
-            position=Point(x=0.4, y=-0.2, z=0.12 + z_offset),
+            position=Point(x=0.4, y=-0.2, z=0.0166 + z_offset),
             orientation=Quaternion(x=grasp_orientation['x'], y=grasp_orientation['y'], z=grasp_orientation['z'], w=grasp_orientation['w'])
         ) # Z adjusted for grasp
         marker_post_grasp = Pose(
@@ -181,7 +184,7 @@ def main():
             orientation=Quaternion(x=grasp_orientation['x'], y=grasp_orientation['y'], z=grasp_orientation['z'], w=grasp_orientation['w'])
         )
         bowl_drop = Pose(
-            position=Point(x=0.4, y=0.2, z=0.15 + z_offset),
+            position=Point(x=0.4, y=0.2, z=0.0466 + z_offset),
             orientation=Quaternion(x=grasp_orientation['x'], y=grasp_orientation['y'], z=grasp_orientation['z'], w=grasp_orientation['w'])
         )
         bowl_post_drop = Pose(
