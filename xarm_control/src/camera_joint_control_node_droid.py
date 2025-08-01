@@ -21,15 +21,15 @@ class CameraJointControlNode:
         # --- Camera Subscriptions ---
         # Gazebo Camera
         self.camera_image_subscriber_gazebo = rospy.Subscriber(
-            '/camera/image_raw', Image, self.camera_image_callback_gazebo, queue_size=10)
+            '/xarm_exterior_camera/image_raw', Image, self.camera_image_callback_gazebo, queue_size=10)
         self.camera_info_subscriber_gazebo = rospy.Subscriber(
-            '/camera/camera_info', CameraInfo, self.camera_info_callback_gazebo, queue_size=10)
+            '/xarm_exterior_camera/camera_info', CameraInfo, self.camera_info_callback_gazebo, queue_size=10)
 
         # RealSense Camera (Color)
         self.camera_image_subscriber_realsense_color = rospy.Subscriber(
-            '/arm_camera/camera/image_raw', Image, self.camera_image_callback_realsense_color, queue_size=10)
+            '/realsense_gazebo_camera/color/image_raw', Image, self.camera_image_callback_realsense_color, queue_size=10)
         self.camera_info_subscriber_realsense_color = rospy.Subscriber(
-            '/arm_camera/camera/camera_info', CameraInfo, self.camera_info_callback_realsense_color, queue_size=10)
+            '/realsense_gazebo_camera/color/camera_info', CameraInfo, self.camera_info_callback_realsense_color, queue_size=10)
 
         # --- Joint State Subscription ---
         self.joint_state_subscriber = rospy.Subscriber(

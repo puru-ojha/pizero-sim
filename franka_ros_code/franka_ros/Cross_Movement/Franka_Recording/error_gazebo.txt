@@ -45,15 +45,15 @@ class XArmIKPlayer:
         # --- Kinematics Setup (ikpy) ---
         rospy.loginfo("Loading xArm URDF for ikpy...")
         try:
-            urdf_path = "/home/gunjan/catkin_ws/xarm7_ik_clean.urdf"
+            urdf_path = "/home/gunjan/catkin_ws/xarm7_nomesh.urdf"
             if not os.path.exists(urdf_path):
                 raise IOError(f"URDF file not found at {urdf_path}")
             self.xarm_chain = ikpy.chain.Chain.from_urdf_file(
                 urdf_path,
                 base_elements=["link_base"],   # Base of your robot
-                active_links_mask=[False, True, True, True, True, True, True, True, False, False] # Added False for link_tcp
+                active_links_mask=[False, True, True, True, True, True, True, True, False]
             )
-            rospy.loginfo("ikpy chain for xArm created successfully, including link_tcp from URDF.")
+            rospy.loginfo("ikpy chain for xArm created successfully.")
         except Exception as e:
             rospy.logerr(f"Failed to load URDF for ikpy: {e}")
             sys.exit(1)
@@ -78,8 +78,7 @@ class XArmIKPlayer:
 
     def load_poses_as_matrices(self, filepath):
         """
-        Loads poses and applies a correction for end-effector differences.
-        Base correction is not needed as robots are assumed to be aligned.
+        Loads poses, applies a two-stage correction (base and tool), and returns 4x4 matrices.
         """
         try:
             with open(filepath, 'r') as f:
@@ -89,38 +88,43 @@ class XArmIKPlayer:
             rospy.logerr(f"Failed to read file {filepath}: {e}")
             return []
 
-        # --- End-Effector Correction (using original data from cross_context.txt) ---
-        # This matrix transforms a desired TCP pose (from the Franka) into the required
-        # pose for the xArm's end-effector link (link_eef).
-        # T_ee_corr = T_xarm_eef_home * inv(T_franka_tcp_home)
+        # --- Stage 1: Base Orientation Correction (Wrist-to-Wrist) ---
+        xarm_home_quat = np.array([0.0, 0.0, 1.0, 0.0])
+        franka_home_quat = np.array([0.990, -0.131, 0.058, -0.010])
+        xarm_home_rot = tf_trans.quaternion_matrix(xarm_home_quat)[:3, :3]
+        franka_home_rot = tf_trans.quaternion_matrix(franka_home_quat)[:3, :3]
+        base_correction_rot = np.dot(xarm_home_rot, franka_home_rot.T)
+        rospy.loginfo("Applying base rotational correction.")
 
-        # xArm EEF at home (from tf_echo link_base -> link_tcp)
-        xarm_trans = [0.426, 0.025, 0.476]
-        xarm_quat = [0.957, -0.002, 0.256, 0.139]
-        T_xarm_eef_home = tf_trans.quaternion_matrix(xarm_quat)
-        T_xarm_eef_home[0:3, 3] = xarm_trans
+        # --- Stage 2: Tool-Center-Point (TCP) Correction ---
+        # Transform from Franka wrist to Franka TCP
+        T_franka_wrist_to_tcp = tf_trans.quaternion_matrix([0.0, 0.0, -0.383, 0.924])
+        T_franka_wrist_to_tcp[0:3, 3] = [0.0, 0.0, 0.103]
 
-        # Franka TCP at home (from tf_echo panda_link0 -> panda_hand_tcp)
-        franka_trans = [0.307, -0.000, 0.487]
-        franka_quat = [1.000, 0.000, 0.000, 0.000]
-        T_franka_tcp_home = tf_trans.quaternion_matrix(franka_quat)
-        T_franka_tcp_home[0:3, 3] = franka_trans
+        # Transform from xArm wrist to xArm TCP
+        T_xarm_wrist_to_tcp = tf_trans.quaternion_matrix([0.0, 0.0, 0.0, 1.0])
+        T_xarm_wrist_to_tcp[0:3, 3] = [0.0, 0.0, 0.172]
 
-        # Calculate the end-effector correction matrix
-        ee_correction_matrix = np.dot(T_xarm_eef_home, np.linalg.inv(T_franka_tcp_home))
-        rospy.loginfo("Applying original end-effector correction matrix.")
+        # Correction: P_xarm_wrist = P_franka_wrist * T_franka_tcp * inv(T_xarm_tcp)
+        tool_correction_matrix = np.dot(T_franka_wrist_to_tcp, np.linalg.inv(T_xarm_wrist_to_tcp))
+        rospy.loginfo("Applying tool center point (TCP) correction.")
 
         target_matrices = []
         for p_raw in pose_list_raw:
             pos = p_raw['position']
             orient = p_raw['orientation']
             
-            # Create a 4x4 matrix for the loaded Franka TCP pose
+            # Create a 4x4 matrix for the loaded Franka wrist pose
             loaded_pose_matrix = tf_trans.quaternion_matrix([orient['x'], orient['y'], orient['z'], orient['w']])
             loaded_pose_matrix[0:3, 3] = [pos['x'], pos['y'], pos['z']]
 
-            # Apply the end-effector correction (no base correction needed)
-            final_target_matrix = np.dot(loaded_pose_matrix, ee_correction_matrix)
+            # Apply base correction to rotation
+            corrected_rot = np.dot(base_correction_rot, loaded_pose_matrix[:3, :3])
+            base_corrected_pose = np.copy(loaded_pose_matrix)
+            base_corrected_pose[:3, :3] = corrected_rot
+
+            # Apply the final tool correction
+            final_target_matrix = np.dot(base_corrected_pose, tool_correction_matrix)
             
             target_matrices.append(final_target_matrix)
             
@@ -148,7 +152,7 @@ class XArmIKPlayer:
         for i, target_matrix in enumerate(target_matrices):
             # Calculate IK for the current target pose, using the previous result as the seed
             target_joint_angles = self.xarm_chain.inverse_kinematics_frame(
-                target_matrix,
+                target=target_matrix,
                 initial_position=ik_seed
             )
             

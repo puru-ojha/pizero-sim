@@ -1,48 +1,49 @@
 gunjan@gunjan-GL503VD:~/catkin_ws$ rosrun tf tf_echo link_base link1
-At time 33.821
+At time 14.833
 - Translation: [0.000, 0.000, 0.267]
-- Rotation: in Quaternion [0.000, 0.000, -0.246, 0.969]
-            in RPY (radian) [0.000, 0.000, -0.496]
-            in RPY (degree) [0.000, 0.000, -28.426]
+- Rotation: in Quaternion [0.000, 0.000, -0.000, 1.000]
+            in RPY (radian) [0.000, 0.000, -0.001]
+            in RPY (degree) [0.000, 0.000, -0.035]
 
 gunjan@gunjan-GL503VD:~/catkin_ws$ rosrun tf tf_echo link_base link2
-At time 58.661
+At time 32.253
 - Translation: [0.000, 0.000, 0.267]
-- Rotation: in Quaternion [-0.706, -0.036, -0.368, 0.604]
-            in RPY (radian) [-1.571, -0.597, -0.496]
-            in RPY (degree) [-90.000, -34.210, -28.426]
+- Rotation: in Quaternion [-0.707, 0.001, 0.000, 0.707]
+            in RPY (radian) [-1.571, 0.001, -0.001]
+            in RPY (degree) [-90.000, 0.079, -0.035]
 
 gunjan@gunjan-GL503VD:~/catkin_ws$ rosrun tf tf_echo link_base link3
-At time 74.341
-- Translation: [-0.145, 0.078, 0.509]
-- Rotation: in Quaternion [-0.140, -0.259, -0.000, 0.956]
-            in RPY (radian) [-0.313, -0.517, 0.083]
-            in RPY (degree) [-17.920, -29.640, 4.754]
+
+At time 42.053
+- Translation: [0.000, 0.000, 0.560]
+- Rotation: in Quaternion [-0.000, 0.001, -0.001, 1.000]
+            in RPY (radian) [-0.000, 0.001, -0.002]
+            in RPY (degree) [-0.000, 0.079, -0.129]
 
 gunjan@gunjan-GL503VD:~/catkin_ws$ rosrun tf tf_echo link_base link4
-At time 85.661
-- Translation: [-0.099, 0.082, 0.535]
-- Rotation: in Quaternion [0.374, -0.476, 0.587, 0.537]
-            in RPY (radian) [-0.532, -1.255, 2.050]
-            in RPY (degree) [-30.483, -71.921, 117.434]
+At time 55.273
+- Translation: [0.053, -0.000, 0.560]
+- Rotation: in Quaternion [0.707, 0.000, -0.002, 0.707]
+            in RPY (radian) [1.571, 0.003, -0.002]
+            in RPY (degree) [90.000, 0.178, -0.129]
 
 gunjan@gunjan-GL503VD:~/catkin_ws$ rosrun tf tf_echo link_base link5
-At time 99.121
-- Translation: [0.228, 0.093, 0.663]
-- Rotation: in Quaternion [0.644, 0.078, 0.752, 0.115]
-            in RPY (radian) [1.036, -1.257, 2.052]
-            in RPY (degree) [59.369, -72.004, 117.590]
+At time 64.233
+- Translation: [0.129, -0.000, 0.217]
+- Rotation: in Quaternion [1.000, -0.001, -0.002, -0.000]
+            in RPY (radian) [-3.142, 0.003, -0.003]
+            in RPY (degree) [-180.000, 0.178, -0.150]
 
 gunjan@gunjan-GL503VD:~/catkin_ws$ rosrun tf tf_echo link_base link6
-At time 115.821
-- Translation: [0.228, 0.093, 0.663]
-- Rotation: in Quaternion [-0.774, -0.183, -0.183, 0.578]
-            in RPY (radian) [-1.882, -0.517, 0.082]
-            in RPY (degree) [-107.808, -29.628, 4.708]
+At time 72.673
+- Translation: [0.129, -0.000, 0.217]
+- Rotation: in Quaternion [-0.707, 0.002, 0.000, 0.707]
+            in RPY (radian) [-1.571, 0.003, -0.003]
+            in RPY (degree) [-90.000, 0.186, -0.150]
 
 gunjan@gunjan-GL503VD:~/catkin_ws$ rosrun tf tf_echo link_base link7
-At time 135.621
-- Translation: [0.341, 0.073, 0.620]
-- Rotation: in Quaternion [0.956, -0.001, 0.259, 0.139]
-            in RPY (radian) [2.832, -0.518, 0.081]
-            in RPY (degree) [162.238, -29.654, 4.614]
+At time 83.373
+- Translation: [0.205, -0.000, 0.120]
+- Rotation: in Quaternion [1.000, -0.001, -0.002, -0.000]
+            in RPY (radian) [-3.142, 0.003, -0.003]
+            in RPY (degree) [-180.000, 0.186, -0.152]

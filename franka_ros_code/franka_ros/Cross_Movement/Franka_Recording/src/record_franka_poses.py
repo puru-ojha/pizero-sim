@@ -57,36 +57,19 @@ class FrankaRecorder:
         self.hand_move_group.stop()
         return True
 
-    def record_trajectory_from_waypoints(self, waypoints):
+    def record_plan_to_poses(self, plan):
         """
-        Computes a Cartesian path through a list of waypoints and records the full trajectory.
-        Does NOT execute the plan.
+        Converts a joint-space plan into a list of Cartesian poses using Forward Kinematics.
         """
-        if not waypoints:
-            rospy.logerr("Waypoint list is empty. Cannot record trajectory.")
-            return []
-
-        rospy.loginfo("Computing Cartesian path through {} waypoints...".format(len(waypoints)))
-        # Compute the Cartesian path. eef_step is the resolution.
-        # The third argument, jump_threshold, is set to False to disable it, matching the C++ signature.
-        (plan, fraction) = self.arm_move_group.compute_cartesian_path(
-            waypoints, 0.01, False
-        )
-
-        rospy.loginfo("Cartesian path computed. Fraction of path achieved: {:.2f}%".format(fraction * 100))
-
-        if fraction < 0.9: # Allow for some tolerance
-            rospy.logwarn("Could not compute a complete Cartesian path. The recorded trajectory may be incomplete.")
-
         if not plan.joint_trajectory.points:
-            rospy.logerr("Trajectory planning failed. The plan contains no points.")
+            rospy.logerr("Input plan contains no points. Cannot record poses.")
             return []
 
         recorded_poses = []
         joint_names = plan.joint_trajectory.joint_names
         header = plan.joint_trajectory.header
 
-        rospy.loginfo("Performing Forward Kinematics for each point in the trajectory...")
+        rospy.loginfo("Performing Forward Kinematics for each point in the planned trajectory...")
         for point in plan.joint_trajectory.points:
             fk_request = GetPositionFKRequest()
             fk_request.header = header
@@ -102,17 +85,42 @@ class FrankaRecorder:
             except rospy.ServiceException as e:
                 rospy.logerr("FK service call failed: {}".format(e))
         
-        rospy.loginfo("Recorded {} total poses for the trajectory.".format(len(recorded_poses)))
+        rospy.loginfo("Converted plan to {} Cartesian poses.".format(len(recorded_poses)))
         return recorded_poses
 
-    def execute_move_to_pose(self, target_pose):
+    def plan_and_execute_to_pose(self, target_pose, all_poses_list):
         """
-        Plans and executes a move to a target pose.
+        Plans a motion to a target pose, records the plan, and then executes it.
         """
         self.arm_move_group.set_pose_target(target_pose)
-        success = self.arm_move_group.go(wait=True)
+        
+        # Plan the motion - this returns a tuple in some MoveIt versions
+        plan_result = self.arm_move_group.plan()
+
+        # Extract the actual plan from the tuple
+        plan = plan_result[1]  # The RobotTrajectory is the second element
+
+        if not plan.joint_trajectory.points:
+            rospy.logerr("Could not create a plan to the target pose. Aborting segment.")
+            self.arm_move_group.clear_pose_targets()
+            return False
+
+        # Record the planned path before execution
+        rospy.loginfo("Recording planned trajectory...")
+        segment_poses = self.record_plan_to_poses(plan)
+        if segment_poses:
+            all_poses_list.extend(segment_poses)
+        
+        # Execute the planned path
+        rospy.loginfo("Executing planned trajectory...")
+        success = self.arm_move_group.execute(plan, wait=True)
+        
         self.arm_move_group.stop()
         self.arm_move_group.clear_pose_targets()
+        
+        if not success:
+            rospy.logwarn("Failed to execute the planned trajectory.")
+
         return success
 
     def save_poses_to_file(self, poses, filename="franka_poses.json"):
@@ -143,7 +151,7 @@ def main():
 
         # --- Define Poses in Robot's Base Frame ---
         # VERTICAL OFFSET to avoid collision due to gripper length mismatch
-        z_offset = 0.15 # 15 cm
+        z_offset = 0 # 0 cm
 
         # Orientation for a top-down grasp
         grasp_orientation = {'x': -1.0, 'y': 0.0, 'z': 0.0, 'w': 0.0}
@@ -182,46 +190,50 @@ def main():
         )
 
         # --- 1. Define Waypoints for the Full Trajectory ---
-        waypoints = []
-        waypoints.append(home_pose)
-        waypoints.append(marker_pre_grasp)
-        waypoints.append(marker_grasp)
-        waypoints.append(marker_post_grasp)
-        waypoints.append(bowl_pre_drop)
-        waypoints.append(bowl_drop)
-        waypoints.append(bowl_post_drop)
-        waypoints.append(home_pose)
+        waypoints = {
+            "home_pose": home_pose,
+            "marker_pre_grasp": marker_pre_grasp,
+            "marker_grasp": marker_grasp,
+            "marker_post_grasp": marker_post_grasp,
+            "bowl_pre_drop": bowl_pre_drop,
+            "bowl_drop": bowl_drop,
+            "bowl_post_drop": bowl_post_drop,
+            "home_pose_return": home_pose
+        }
 
-        # --- 2. Record Full Trajectory without Executing ---
-        rospy.loginfo("--- Starting Trajectory Recording Phase ---")
-        full_trajectory = recorder.record_trajectory_from_waypoints(waypoints)
+        # --- 2. Plan, Record, and Execute the Full Trajectory ---
+        rospy.loginfo("--- Starting Trajectory Planning, Recording, and Execution Phase ---")
+        full_trajectory = []
 
+        # Move to initial home pose
+        rospy.loginfo("Moving to home pose.")
+        recorder.plan_and_execute_to_pose(waypoints["home_pose"], full_trajectory)
+        
+        # Execute pick sequence
+        rospy.loginfo("Executing pick sequence.")
+        recorder.operate_gripper("open")
+        recorder.plan_and_execute_to_pose(waypoints["marker_pre_grasp"], full_trajectory)
+        recorder.plan_and_execute_to_pose(waypoints["marker_grasp"], full_trajectory)
+        recorder.operate_gripper("close")
+        recorder.plan_and_execute_to_pose(waypoints["marker_post_grasp"], full_trajectory)
+
+        # Execute place sequence
+        rospy.loginfo("Executing place sequence.")
+        recorder.plan_and_execute_to_pose(waypoints["bowl_pre_drop"], full_trajectory)
+        recorder.plan_and_execute_to_pose(waypoints["bowl_drop"], full_trajectory)
+        recorder.operate_gripper("open")
+        recorder.plan_and_execute_to_pose(waypoints["bowl_post_drop"], full_trajectory)
+
+        # Return to home pose
+        rospy.loginfo("Returning to home pose.")
+        recorder.plan_and_execute_to_pose(waypoints["home_pose_return"], full_trajectory)
+
+        # --- 3. Save the Recorded Trajectory ---
         if not full_trajectory:
-            rospy.logerr("Recording failed, no poses were captured. Aborting.")
+            rospy.logerr("Recording failed, no poses were captured. Aborting save.")
             return
 
         recorder.save_poses_to_file(full_trajectory)
-
-        # --- 3. Execute the Full Pick-and-Place Motion for Confirmation ---
-        rospy.loginfo("--- Starting Motion Execution Phase ---")
-        rospy.loginfo("Moving to home pose.")
-        recorder.execute_move_to_pose(home_pose)
-        
-        rospy.loginfo("Executing pick sequence.")
-        recorder.operate_gripper("open")
-        recorder.execute_move_to_pose(marker_pre_grasp)
-        recorder.execute_move_to_pose(marker_grasp)
-        recorder.operate_gripper("close")
-        recorder.execute_move_to_pose(marker_post_grasp)
-
-        rospy.loginfo("Executing place sequence.")
-        recorder.execute_move_to_pose(bowl_pre_drop)
-        recorder.execute_move_to_pose(bowl_drop)
-        recorder.operate_gripper("open")
-        recorder.execute_move_to_pose(bowl_post_drop)
-
-        rospy.loginfo("Returning to home pose.")
-        recorder.execute_move_to_pose(home_pose)
 
         rospy.loginfo("Pick and place routine finished.")
 

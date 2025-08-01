@@ -1,84 +1,34 @@
 For XARM
 
-At time 0.261
-- Translation: [-0.216, 0.214, 0.364]
-- Rotation: in Quaternion [-0.000, -0.000, 1.000, -0.000]
-            in RPY (radian) [-0.000, 0.000, -3.142]
-            in RPY (degree) [-0.000, 0.000, -180.000]
+gunjan@gunjan-GL503VD:~/catkin_ws$ rosrun tf tf_echo link_base link_eef
+At time 50.330
+- Translation: [0.342, 0.071, 0.619]
+- Rotation: in Quaternion [0.957, -0.002, 0.256, 0.139]
+            in RPY (radian) [2.832, -0.513, 0.079]
+            in RPY (degree) [162.252, -29.379, 4.499]
 
-Cgunjan@gunjan-GL503VD:~/catkin_ws$ rosrun tf tf_echo link7 link_tcp
-Failure at 4.936000000
-Exception thrown:"link7" passed to lookupTransform argument target_frame does not exist. 
-The current list of frames is:
 
-Failure at 4.936000000
-Exception thrown:"link7" passed to lookupTransform argument target_frame does not exist. 
-The current list of frames is:
+gunjan@gunjan-GL503VD:~/catkin_ws$ rosrun tf tf_echo link_base link_tcp
+At time 7.121
+- Translation: [0.426, 0.025, 0.476]
+- Rotation: in Quaternion [0.957, -0.002, 0.256, 0.139]
+            in RPY (radian) [2.832, -0.513, 0.078]
+            in RPY (degree) [162.274, -29.378, 4.478]
 
+rosrun tf tf_echo link_eef link_tcp
 At time 0.000
 - Translation: [0.000, 0.000, 0.172]
 - Rotation: in Quaternion [0.000, 0.000, 0.000, 1.000]
             in RPY (radian) [0.000, -0.000, 0.000]
             in RPY (degree) [0.000, -0.000, 0.000]
 
+------------------------------
 
 
 For Franka
-
-gunjan@gunjan-GL503VD:~/catkin_ws$ rosrun tf tf_echo panda_link0 panda_link8
-Failure at 4.963000000
-Exception thrown:Could not find a connection between 'panda_link0' and 'panda_link8' because they are not part of the same tree.Tf has two or more unconnected trees.
-The current list of frames is:
-Frame panda_camera1 exists with parent world.
-Frame panda_camera2 exists with parent panda_link7.
-Frame panda_hand exists with parent panda_link8.
-Frame panda_link8 exists with parent panda_link7.
-Frame panda_hand_sc exists with parent panda_hand.
-Frame panda_hand_tcp exists with parent panda_hand.
-Frame panda_link0_sc exists with parent panda_link0.
-Frame panda_link0 exists with parent world.
-Frame panda_link1_sc exists with parent panda_link1.
-Frame panda_link2_sc exists with parent panda_link2.
-Frame panda_link3_sc exists with parent panda_link3.
-Frame panda_link4_sc exists with parent panda_link4.
-Frame panda_link5_sc exists with parent panda_link5.
-Frame panda_link6_sc exists with parent panda_link6.
-Frame panda_link7_sc exists with parent panda_link7.
-
-Failure at 4.963000000
-Exception thrown:Could not find a connection between 'panda_link0' and 'panda_link8' because they are not part of the same tree.Tf has two or more unconnected trees.
-The current list of frames is:
-Frame panda_camera1 exists with parent world.
-Frame panda_camera2 exists with parent panda_link7.
-Frame panda_hand exists with parent panda_link8.
-Frame panda_link8 exists with parent panda_link7.
-Frame panda_hand_sc exists with parent panda_hand.
-Frame panda_hand_tcp exists with parent panda_hand.
-Frame panda_link0_sc exists with parent panda_link0.
-Frame panda_link0 exists with parent world.
-Frame panda_link1_sc exists with parent panda_link1.
-Frame panda_link2_sc exists with parent panda_link2.
-Frame panda_link3_sc exists with parent panda_link3.
-Frame panda_link4_sc exists with parent panda_link4.
-Frame panda_link5_sc exists with parent panda_link5.
-Frame panda_link6_sc exists with parent panda_link6.
-Frame panda_link7_sc exists with parent panda_link7.
-
-At time 5.935
-- Translation: [0.126, 0.005, 0.942]
-- Rotation: in Quaternion [0.990, -0.131, 0.058, -0.010]
-            in RPY (radian) [-3.106, -0.113, -0.266]
-            in RPY (degree) [-177.986, -6.495, -15.222]
-At time 6.934
-- Translation: [0.126, 0.005, 0.942]
-- Rotation: in Quaternion [0.990, -0.131, 0.058, -0.010]
-            in RPY (radian) [-3.106, -0.113, -0.265]
-            in RPY (degree) [-177.985, -6.497, -15.197]
-
-
-gunjan@gunjan-GL503VD:~/catkin_ws$ rosrun tf tf_echo panda_link8 panda_hand_tcp
-At time 0.000
-- Translation: [0.000, 0.000, 0.103]
-- Rotation: in Quaternion [0.000, 0.000, -0.383, 0.924]
-            in RPY (radian) [0.000, 0.000, -0.785]
-            in RPY (degree) [0.000, 0.000, -45.000]
+rosrun tf tf_echo panda_link0 panda_hand_tcp`
+At time 26.234
+- Translation: [0.307, -0.000, 0.487]
+- Rotation: in Quaternion [1.000, 0.000, 0.000, 0.000]
+            in RPY (radian) [3.142, -0.001, 0.000]
+            in RPY (degree) [179.999, -0.051, 0.018]
