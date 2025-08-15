@@ -6,6 +6,7 @@ import json
 import os
 import ikpy.chain
 import tf
+import threading
 from sensor_msgs.msg import JointState
 from trajectory_msgs.msg import JointTrajectory, JointTrajectoryPoint
 from control_msgs.msg import FollowJointTrajectoryAction, FollowJointTrajectoryGoal
@@ -44,10 +45,13 @@ class XArmIKPlayer:
             self.action_server_connected = True
         else:
             rospy.logerr("xArm Joint Trajectory Action server did not come up.")
-        rospy.sleep(2)
 
-        # To store the recorded poses of the xArm
-        self.recorded_xarm_poses = []
+        # --- For actual trajectory logging ---
+        self.actual_recorded_xarm_poses = []
+        self.recording_active = False
+        self.stop_event = threading.Event()
+        self.logging_thread = None
+        self.logging_start_time = None # New variable
 
         # --- Kinematics Setup (ikpy) ---
         rospy.loginfo("Loading xArm URDF for ikpy...")
@@ -109,7 +113,8 @@ class XArmIKPlayer:
 
     def load_poses_as_matrices(self, filepath):
         """
-        Loads poses and converts them directly to transformation matrices.
+        Loads poses and converts them directly to transformation matrices,
+        also returning their original time_from_start values.
         """
         try:
             with open(filepath, 'r') as f:
@@ -117,43 +122,31 @@ class XArmIKPlayer:
             rospy.loginfo(f"Loaded {len(pose_list_raw)} raw poses from {filepath}")
         except IOError as e:
             rospy.logerr(f"Failed to read file {filepath}: {e}")
-            return []
+            return [], [] # Return empty lists for both
 
         target_matrices = []
+        franka_times = []
         for p_raw in pose_list_raw:
             pos = p_raw['position']
             orient = p_raw['orientation']
+            time_from_start = p_raw.get('time_from_start', 0.0) # Get time, default to 0.0 if not present
+
             loaded_pose_matrix = tf_trans.quaternion_matrix([orient['x'], orient['y'], orient['z'], orient['w']])
             loaded_pose_matrix[0:3, 3] = [pos['x'], pos['y'], pos['z']]
             target_matrices.append(loaded_pose_matrix)
-        return target_matrices
+            franka_times.append(time_from_start)
+        return target_matrices, franka_times
 
-    def move_to_single_pose(self, target_matrix):
+    def move_to_single_pose(self, ros_joint_angles):
         """
-        Calculates IK for a single pose, executes it, and records the final pose after completion.
+        Moves the robot to a single pose using pre-calculated joint angles.
         """
         rospy.loginfo("--- Moving to a single target pose ---")
         
-        # Use the current robot position as the seed
-        ik_seed = np.zeros(len(self.xarm_chain.links))
-        ik_seed[self.xarm_chain.active_links_mask] = self.joint_positions
-
-        # Calculate IK for the target pose
-        target_joint_angles = self.xarm_chain.inverse_kinematics_frame(
-            target_matrix,
-            initial_position=ik_seed,
-            orientation_mode="all"
-        )
-
-        if target_joint_angles is None:
-            rospy.logerr("IK failed for the target pose. Aborting.")
-            return
-
         # Create a trajectory with a single point
-        ros_joint_angles = target_joint_angles[self.xarm_chain.active_links_mask]
         point = JointTrajectoryPoint(
-            positions=ros_joint_angles.tolist(),
-            time_from_start=rospy.Duration.from_sec(5.0) # Give it 5 seconds to get there
+            positions=ros_joint_angles,
+            time_from_start=rospy.Duration.from_sec(0.1) # Reach in 0.1 seconds
         )
         traj_msg = JointTrajectory(joint_names=self.joint_names, points=[point])
         goal_msg = FollowJointTrajectoryGoal(trajectory=traj_msg)
@@ -162,7 +155,7 @@ class XArmIKPlayer:
         self.action_client.send_goal(goal_msg)
 
         # Wait for the trajectory to finish
-        if self.action_client.wait_for_result(rospy.Duration(10.0)):
+        if self.action_client.wait_for_result(rospy.Duration(0.5)): # Wait up to 0.5 seconds
             rospy.loginfo("Movement finished successfully.")
             
             # After movement is complete, get the final pose
@@ -170,9 +163,7 @@ class XArmIKPlayer:
             final_pose = self.get_current_tcp_pose()
 
             if final_pose:
-                self.recorded_xarm_poses = [final_pose] # Store only the single final pose
-                output_filepath = "/home/gunjan/catkin_ws/src/franka_ros_code/franka_ros/Cross_Movement/xarm_Following/xarm_single_pose.json"
-                self.save_poses_to_json(output_filepath, self.recorded_xarm_poses)
+                pass # No longer saving single pose
             else:
                 rospy.logerr("Could not retrieve final TCP pose after movement.")
 
@@ -181,47 +172,40 @@ class XArmIKPlayer:
 
     
 
-    def execute_ik_trajectory(self, target_matrices):
+    def execute_ik_trajectory(self, target_joint_angles_list, franka_times_segment):
         """
-        Calculates a joint trajectory from a list of Cartesian poses using ikpy and executes it.
+        Executes a joint trajectory from a list of pre-calculated joint angles.
         """
         rospy.loginfo("--- Executing full IK trajectory ---")
         
         trajectory_points = []
-        time_from_start = 0.0
-        segment_duration = 0.1 # seconds per segment
+        
+        # Get the start time of this segment from the Franka's original timing
+        # This is the time of the first point in the segment relative to the Franka's full trajectory start.
+        segment_start_time_franka = franka_times_segment[0] if franka_times_segment else 0.0
+        
+        last_time_from_start_for_segment = 0.0 # Time relative to the start of *this* segment
+        epsilon = 1e-6 # Small value to ensure strict increase
 
-        # Use the current robot position as the seed for the first IK calculation
-        # For subsequent IK calculations, use the previous IK result as the seed
-        current_ik_seed = np.zeros(len(self.xarm_chain.links))
-        if self.joint_positions is not None:
-            current_ik_seed[self.xarm_chain.active_links_mask] = self.joint_positions
-        else:
-            rospy.logwarn("Initial joint positions not available, using zero seed for first IK.")
-
-        for i, target_matrix in enumerate(target_matrices):
+        rospy.loginfo(f"Generating trajectory points from {len(target_joint_angles_list)} pre-calculated IK solutions.")
+        for i, ros_joint_angles in enumerate(target_joint_angles_list):
+            # Calculate time relative to the start of *this* segment
+            current_time_franka_relative_to_segment_start = franka_times_segment[i] - segment_start_time_franka
             
-            target_joint_angles = self.xarm_chain.inverse_kinematics_frame(
-                target_matrix,
-                initial_position=current_ik_seed,
-                orientation_mode="all"
-            )
-
-            if target_joint_angles is None:
-                rospy.logerr(f"IK failed for target pose {i}. Skipping this point.")
-                continue # Skip this point and try the next one
-
-            ros_joint_angles = target_joint_angles[self.xarm_chain.active_links_mask]
+            # Ensure strictly increasing time_from_start
+            # If the current time is not strictly greater than the last, increment it slightly
+            if current_time_franka_relative_to_segment_start <= last_time_from_start_for_segment:
+                current_time_franka_relative_to_segment_start = last_time_from_start_for_segment + epsilon
             
-            time_from_start += segment_duration
             point = JointTrajectoryPoint(
-                positions=ros_joint_angles.tolist(),
-                time_from_start=rospy.Duration.from_sec(time_from_start)
+                positions=ros_joint_angles,
+                time_from_start=rospy.Duration.from_sec(current_time_franka_relative_to_segment_start)
             )
             trajectory_points.append(point)
             
-            # Update the seed for the next IK calculation
-            current_ik_seed = target_joint_angles
+            last_time_from_start_for_segment = current_time_franka_relative_to_segment_start
+
+        rospy.loginfo(f"Finished generating trajectory points. Generated {len(trajectory_points)} trajectory points.")
 
         if not trajectory_points:
             rospy.logwarn("No valid trajectory points generated. Aborting playback.")
@@ -230,7 +214,7 @@ class XArmIKPlayer:
         traj_msg = JointTrajectory(joint_names=self.joint_names, points=trajectory_points)
         goal_msg = FollowJointTrajectoryGoal(trajectory=traj_msg)
 
-        rospy.loginfo(f"Sending trajectory with {len(trajectory_points)} points to the action server...")
+        rospy.loginfo(f"Sending trajectory to the action server...")
         self.action_client.send_goal(goal_msg)
 
         # Wait for the trajectory to finish indefinitely
@@ -239,24 +223,108 @@ class XArmIKPlayer:
         else:
             rospy.logwarn("Full trajectory playback timed out or was preempted.")
 
+    def _log_current_tcp_pose_thread(self):
+        """
+        Thread function to continuously log the current TCP pose.
+        """
+        rospy.loginfo("Starting TCP pose logging thread.")
+        while not self.stop_event.is_set():
+            if self.recording_active:
+                current_pose = self.get_current_tcp_pose()
+                if current_pose:
+                    # Calculate time from start of logging
+                    elapsed_time = (rospy.Time.now() - self.logging_start_time).to_sec()
+                    # Add time_from_start to the pose dictionary
+                    current_pose['time_from_start'] = elapsed_time
+                    self.actual_recorded_xarm_poses.append(current_pose)
+            self.stop_event.wait(0.1) # Log every 100ms (0.1 seconds)
+
+    def start_logging_thread(self):
+        """
+        Starts the separate thread for logging current TCP poses.
+        """
+        if self.logging_thread is None or not self.logging_thread.is_alive():
+            self.stop_event.clear() # Clear any previous stop signal
+            self.logging_thread = threading.Thread(target=self._log_current_tcp_pose_thread)
+            self.logging_thread.daemon = True # Allow main program to exit even if thread is running
+            self.logging_start_time = rospy.Time.now() # Set start time for logging
+            self.logging_thread.start()
+            rospy.loginfo("TCP pose logging thread started.")
+        else:
+            rospy.logwarn("Logging thread is already running.")
+        self.recording_active = True # Activate recording
+
+    def stop_logging_thread_and_save(self):
+        """
+        Stops the logging thread and saves the recorded poses to a file.
+        """
+        self.recording_active = False # Deactivate recording
+        if self.logging_thread and self.logging_thread.is_alive():
+            self.stop_event.set() # Signal the thread to stop
+            self.logging_thread.join(timeout=1.0) # Wait for the thread to finish
+            if self.logging_thread.is_alive():
+                rospy.logwarn("Logging thread did not terminate gracefully.")
+        
+        if self.actual_recorded_xarm_poses:
+            output_filepath = "/home/gunjan/catkin_ws/src/franka_ros_code/franka_ros/Cross_Movement/xarm_Following/xarm_actual_trajectory.json"
+            self.save_poses_to_json(output_filepath, self.actual_recorded_xarm_poses)
+            rospy.loginfo(f"Saved {len(self.actual_recorded_xarm_poses)} actual xArm poses to {output_filepath}")
+        else:
+            rospy.logwarn("No actual xArm poses were recorded.")
+
 def main():
     try:
         player = XArmIKPlayer()
 
         poses_filepath = "/home/gunjan/catkin_ws/src/franka_ros_code/franka_ros/Cross_Movement/Franka_Recording/franka_poses.json"
-        target_matrices = player.load_poses_as_matrices(poses_filepath)
+        target_matrices, franka_times = player.load_poses_as_matrices(poses_filepath)
 
         if not target_matrices:
             rospy.logerr("Aborting due to empty pose list.")
             return
 
-        # --- EXPERIMENT: Move to the first pose only ---
-        # first_pose_matrix = target_matrices[0]
-        # player.move_to_single_pose(first_pose_matrix)
+        # --- New Step 1: Calculate all IK solutions upfront ---
+        rospy.loginfo("--- Pre-calculating all IK solutions ---")
+        all_ik_joint_angles = []
+        current_ik_seed = np.zeros(len(player.xarm_chain.links))
+        if player.joint_positions is not None:
+            current_ik_seed[player.xarm_chain.active_links_mask] = player.joint_positions
+        else:
+            rospy.logwarn("Initial joint positions not available, using zero seed for first IK.")
 
-        rospy.loginfo("--- Starting xArm IK Playback ---")
-        player.execute_ik_trajectory(target_matrices)
-        rospy.loginfo("Playback finished.")
+        for i, target_matrix in enumerate(target_matrices):
+            target_joint_angles = player.xarm_chain.inverse_kinematics_frame(
+                target_matrix,
+                initial_position=current_ik_seed,
+                orientation_mode="all"
+            )
+            if target_joint_angles is None:
+                rospy.logerr(f"IK failed for target pose {i}. Aborting pre-calculation.")
+                return # Abort if any IK fails
+            all_ik_joint_angles.append(target_joint_angles[player.xarm_chain.active_links_mask].tolist())
+            current_ik_seed = target_joint_angles # Update seed for next IK
+
+        rospy.loginfo(f"Pre-calculation complete. Generated {len(all_ik_joint_angles)} IK solutions.")
+
+        # --- New Step 2: Move to the first pose (using the pre-calculated IK) ---
+        rospy.loginfo("--- Moving to the first pose ---")
+        first_point_positions = all_ik_joint_angles[0]
+        player.move_to_single_pose(first_point_positions) # Now passes pre-calculated IK
+        rospy.loginfo("First pose reached.")
+
+        # --- New Step 3: Start logging and send the rest of the trajectory simultaneously ---
+        player.start_logging_thread() # Start logging
+
+        if len(all_ik_joint_angles) > 1:
+            rospy.loginfo("--- Sending remaining trajectory and logging simultaneously ---")
+            # Pass the remaining pre-calculated IK solutions and corresponding Franka times
+            player.execute_ik_trajectory(all_ik_joint_angles[1:], franka_times[1:])
+            rospy.loginfo("Remaining trajectory playback finished.")
+        else:
+            rospy.loginfo("Only one pose in trajectory, no further movement needed.")
+
+        # --- New Step 4: Stop the logging thread and save recorded poses ---
+        player.stop_logging_thread_and_save() # New method to stop thread and save
 
     except rospy.ROSInterruptException:
         pass

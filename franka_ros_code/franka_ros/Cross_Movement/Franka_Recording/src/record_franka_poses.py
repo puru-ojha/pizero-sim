@@ -82,7 +82,10 @@ class FrankaRecorder:
             try:
                 fk_response = self.fk_service(fk_request)
                 if fk_response.error_code.val == fk_response.error_code.SUCCESS:
-                    recorded_poses.append(fk_response.pose_stamped[0].pose)
+                    recorded_poses.append({
+                        'pose': fk_response.pose_stamped[0].pose,
+                        'time_from_start': point.time_from_start.to_sec()
+                    })
                 else:
                     rospy.logerr("FK failed with error code: {}".format(fk_response.error_code.val))
             except rospy.ServiceException as e:
@@ -111,7 +114,19 @@ class FrankaRecorder:
         # Record the planned path before execution
         rospy.loginfo("Recording planned trajectory...")
         segment_poses = self.record_plan_to_poses(plan)
+        
         if segment_poses:
+            # Calculate the offset for time_from_start
+            # If full_trajectory is empty, offset is 0.
+            # Otherwise, offset is the time_from_start of the last point in full_trajectory.
+            time_offset = 0.0
+            if all_poses_list:
+                time_offset = all_poses_list[-1]['time_from_start'] # Get time of last point
+
+            # Apply the offset to each pose in the current segment
+            for pose_data in segment_poses:
+                pose_data['time_from_start'] += time_offset
+            
             all_poses_list.extend(segment_poses)
         
         # Execute the planned path
@@ -128,13 +143,16 @@ class FrankaRecorder:
 
     def save_poses_to_file(self, poses, filename="franka_poses.json"):
         """
-        Saves a list of Pose objects to a JSON file.
+        Saves a list of Pose objects and their time_from_start to a JSON file.
         """
         pose_list = []
-        for pose in poses:
+        for item in poses: # item will be a dict with 'pose' and 'time_from_start'
+            pose = item['pose']
+            time_from_start = item['time_from_start']
             p_dict = {
                 'position': {'x': pose.position.x, 'y': pose.position.y, 'z': pose.position.z},
-                'orientation': {'x': pose.orientation.x, 'y': pose.orientation.y, 'z': pose.orientation.z, 'w': pose.orientation.w}
+                'orientation': {'x': pose.orientation.x, 'y': pose.orientation.y, 'z': pose.orientation.z, 'w': pose.orientation.w},
+                'time_from_start': time_from_start # Save time
             }
             pose_list.append(p_dict)
 
