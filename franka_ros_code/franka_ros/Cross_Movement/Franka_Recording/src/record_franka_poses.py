@@ -154,7 +154,7 @@ def main():
 
         # --- Define Poses in Robot's Base Frame ---
         # VERTICAL OFFSET to avoid collision due to gripper length mismatch
-        z_offset = 0 # 0 cm
+        z_offset = 0.03 # 0 cm
 
         # Orientation for a top-down grasp
         grasp_orientation = {'x': -1.0, 'y': 0.0, 'z': 0.0, 'w': 0.0}

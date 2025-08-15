@@ -12,14 +12,13 @@ import time
 # Import ikpy
 import ikpy.chain
 
-# A canonical default "ready" pose for the Franka robot
-# This is used to seed the initial IK calculation to ensure the robot starts in a predictable,
-# visually appropriate configuration. The values are for the 7 controllable joints.
-FRANKA_CANONICAL_READY_POSE = [0, -0.785, 0, -2.356, 0, 1.57, 0.785]
+# Initial joint pose for the Franka robot, taken directly from the default in panda.launch.
+# This is used to seed the initial IK calculation.
+FRANKA_INIT_POSE_FROM_LAUNCH = [0, -0.785, 0, -2.356, 0, 1.571, 0.785]
 
-# Note: ikpy uses a different joint representation (includes non-controllable links), so we find the active links.
-
-XARM_POLICY_START_JOINT_POS = [-2.5, -0.6, 0.5, 1.2, 0.0, 1.2, 0.0]
+# Initial joint pose for the xArm robot, taken directly from the default in xarm7_new.launch.
+# The robot is commanded to this position at the start of the policy.
+XARM_INIT_POSE_FROM_LAUNCH = [-0.5, -0.6, 0.5, 1.2, 0.0, 1.2, 0.0]
 
 class CameraJointControlNode:
     def __init__(self):
@@ -181,9 +180,9 @@ class CameraJointControlNode:
     def initialize_robot_pose(self):
         rospy.loginfo("Initializing robot pose for policy...")
 
-        # Step 1: Move xArm directly to the policy start position
-        rospy.loginfo("Moving xArm to policy start position...")
-        target_xarm_joints = np.array(XARM_POLICY_START_JOINT_POS)
+        # Step 1: Move xArm directly to its initial position defined in the launch file.
+        rospy.loginfo("Moving xArm to its initial pose from the launch file...")
+        target_xarm_joints = np.array(XARM_INIT_POSE_FROM_LAUNCH)
         traj_msg = JointTrajectory(
             joint_names=self.joint_names,
             points=[JointTrajectoryPoint(positions=target_xarm_joints, time_from_start=rospy.Duration(5.0))]
@@ -211,10 +210,10 @@ class CameraJointControlNode:
         current_xarm_ikpy[self.xarm_active_link_indices] = self.joint_positions
         xarm_pose = self.xarm_chain.forward_kinematics(current_xarm_ikpy)
 
-        # Use the canonical ready pose as the initial guess for Franka's IK solver.
+        # Use the Franka's launch file pose as the initial guess for its IK solver.
         # This guides the solver to a more natural and predictable solution.
         initial_franka_for_ik = np.zeros(len(self.franka_chain.links))
-        initial_franka_for_ik[self.franka_active_link_indices] = FRANKA_CANONICAL_READY_POSE
+        initial_franka_for_ik[self.franka_active_link_indices] = FRANKA_INIT_POSE_FROM_LAUNCH
 
         # Calculate the Franka joint angles that achieve the same pose
         initial_franka_joints = self.franka_chain.inverse_kinematics_frame(
